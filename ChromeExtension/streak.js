@@ -12519,6 +12519,7 @@ delete Streak._underscore;
     });
     Streak.HTML = HTML
 })(Streak, window);
+//Gmail
 (function (f, n) {
     var e = f.jQuery,
         i = f._,
@@ -15164,6 +15165,7 @@ delete Streak._underscore;
     BB.Models.User = User
 })(Streak);
 //End Models
+/*
 //Start BB Setup
 (function (Streak) {
     var $ = Streak.jQuery,
@@ -15664,7 +15666,7 @@ delete Streak._underscore;
 })(Streak);
 
 //End BB Setup
-
+*/
 //IMT Threads
 (function (m) {
     var h = m.jQuery,
@@ -16090,185 +16092,6 @@ delete Streak._underscore;
     g.onLoad(h.proxy(g.Threads.init, g.Threads))
 })(Streak);
 //BB Start
-(function (Streak) {
-    var _ = Streak._,
-        BB = Streak.BentoBox,
-        Requester = Streak.Requester;
-    BB.Realtime = {
-        active: true,
-        initialized: false,
-        connectDelay: 1E3,
-        token: null,
-        handlers: {},
-        connectTimeout: null,
-        init: function (cb) {
-            var self = this;
-            if (!this.initialized) {
-                this.setupObservers();
-                this.setupChannelFramework();
-                this.initialized = true;
-                BB.bind("reup", function () {
-                    self.connectChannel()
-                })
-            }
-            if (cb) cb()
-        },
-        setupObservers: function () {
-            var self = this;
-            this.handlers.open = function (message) {
-                self.connectDelay = 4E3
-            };
-            this.handlers.error = function (message) {};
-            this.handlers.close = function (message) {
-                self.token = null;
-                self.connectChannel()
-            };
-            this.handlers.message = function (message) {
-                var json = JSON.parse(message.data);
-                switch (json.entityType) {
-                case "Box":
-                    handleCase(json);
-                    break;
-                case "Pipeline":
-                    handleWorkflow(json);
-                    break;
-                case "Reminder":
-                    handleReminder(json);
-                    break;
-                case "Comment":
-                    handleComment(json);
-                    break;
-                case "GmailThread":
-                    handleGmailThread(json);
-                    break;
-                case "Snippet":
-                    handleSnippet(json);
-                    break;
-                default:
-                    BB.logError("Realtime Error - entityType " + json.entityType + " is not supported yet.");
-                    break
-                }
-            };
-            Messenger.observe("channelConnectMessage", function (message) {
-                if (self.handlers[message.op]) self.handlers[message.op](message.data)
-            })
-        },
-        setupChannelFramework: function () {
-            var self = this;
-            Messenger.sendMessage("channelSetup", {
-                src: (Streak.devRealtimeServer || Streak.server) + "/_ah/channel/jsapi"
-            }, "channelSetupReturn", function () {
-                self.connectChannel()
-            })
-        },
-        getToken: function (cb) {
-            var self = this;
-            Requester.getFile({
-                msgUrl: "/realtime/createChannelToken"
-            }, function (res) {
-                self.token = res.message;
-                if (cb) cb()
-            }, function (data, xhr) {
-                self.token = null;
-                if (xhr.status === 401) return true;
-                else if (cb) cb()
-            }, null, 0, true)
-        },
-        connectChannel: function () {
-            if (this.token) Messenger.sendMessage("channelConnect", {
-                token: this.token,
-                server: Streak.server
-            });
-            else this.backoff()
-        },
-        backoff: function () {
-            var self = this;
-            self.connectDelay = Math.min(self.connectDelay * 2, 16E3);
-            clearTimeout(this.connectTimeout);
-            this.connectTimeout = setTimeout(function () {
-                self.getToken(function () {
-                    self.connectChannel()
-                })
-            }, self.connectDelay)
-        }
-    };
-    var handleCase = function (json) {
-            var box;
-            switch (json.REALTIME_EVENT) {
-            case "CREATE":
-                var box = BB.Data.getBox(json.key);
-                if (!box) BB.Data.addNewBox(json.key, function () {
-                    BB.Data.getBox(json.key).trigger("change")
-                });
-                break;
-            case "DELETE":
-                var box = BB.Data.getBox(json.key);
-                if (box) {
-                    var key = box.get("workflowKey");
-                    box.trigger("delete");
-                    BB.Data.getPipelineBoxes(key).trigger("refreshed")
-                }
-                break;
-            case "UPDATE":
-                var box = BB.Data.getBox(json.key);
-                if (box) box.refresh();
-                else BB.Data.addNewBox(json.key, function () {
-                    BB.Data.getBox(json.key).trigger("change")
-                });
-                break
-            }
-        };
-    var handleWorkflow = function (json) {
-            switch (json.REALTIME_EVENT) {
-            case "NEW_ACL":
-            case "CREATE":
-            case "REMOVE_ACL":
-                BB.Data.getAllPipelines().refresh();
-                break;
-            case "DELETE":
-                BB.Data.removePipeline(json.key);
-                break;
-            case "UPDATE":
-                var pipe = BB.Data.getPipeline(json.key);
-                if (pipe) pipe.refresh();
-                else BB.Data.addNewPipeline(json.key);
-                break;
-            case "UPDATE_CASCADE":
-                var pipe = BB.Data.getPipeline(json.key);
-                if (pipe) BB.Data.getPipelineBoxes(json.key).refresh();
-                else BB.Data.addNewPipeline(json.key);
-                break
-            }
-        };
-    var handleComment = function (json) {
-            var box = BB.Data.getBox(json.caseKey);
-            if (box) box.refresh()
-        };
-    var handleReminder = function (json) {
-            var box = BB.Data.getBox(json.caseKey);
-            if (box) box.trigger("reminderRefresh")
-        };
-    var handleGmailThread = function (json) {
-            var box = BB.Data.getBox(json.caseKey);
-            if (box) BB.Data.getGmailThreadGroup(box.key()).refresh()
-        };
-    var handleSnippet = function (json) {
-            switch (json.REALTIME_EVENT) {
-            case "CREATE":
-            case "DELETE":
-                BB.Data.getAllSnippets().refresh();
-                break;
-            case "UPDATE":
-                var snippet = BB.Data.getSnippet(json.key);
-                if (snippet) snippet.refresh();
-                else BB.Data.getAllSnippets().refresh();
-                break
-            }
-        };
-    BB.ready(function (cb) {
-        BB.Realtime.init(cb)
-    })
-})(Streak);
 (function (Streak) {
     var $ = Streak.jQuery,
         _ = Streak._,
@@ -16784,6 +16607,187 @@ delete Streak._underscore;
     BB.Data._initFuncs.push($.proxy(BB.Data.initSendLaters, BB.Data));
     BB.Data._initFuncs.push($.proxy(BB.Data.initSnippets, BB.Data))
 })(Streak);
+/*
+(function (Streak) {
+    var _ = Streak._,
+        BB = Streak.BentoBox,
+        Requester = Streak.Requester;
+    BB.Realtime = {
+        active: true,
+        initialized: false,
+        connectDelay: 1E3,
+        token: null,
+        handlers: {},
+        connectTimeout: null,
+        init: function (cb) {
+            var self = this;
+            if (!this.initialized) {
+                this.setupObservers();
+                this.setupChannelFramework();
+                this.initialized = true;
+                BB.bind("reup", function () {
+                    self.connectChannel()
+                })
+            }
+            if (cb) cb()
+        },
+        setupObservers: function () {
+            var self = this;
+            this.handlers.open = function (message) {
+                self.connectDelay = 4E3
+            };
+            this.handlers.error = function (message) {};
+            this.handlers.close = function (message) {
+                self.token = null;
+                self.connectChannel()
+            };
+            this.handlers.message = function (message) {
+                var json = JSON.parse(message.data);
+                switch (json.entityType) {
+                case "Box":
+                    handleCase(json);
+                    break;
+                case "Pipeline":
+                    handleWorkflow(json);
+                    break;
+                case "Reminder":
+                    handleReminder(json);
+                    break;
+                case "Comment":
+                    handleComment(json);
+                    break;
+                case "GmailThread":
+                    handleGmailThread(json);
+                    break;
+                case "Snippet":
+                    handleSnippet(json);
+                    break;
+                default:
+                    BB.logError("Realtime Error - entityType " + json.entityType + " is not supported yet.");
+                    break
+                }
+            };
+            Messenger.observe("channelConnectMessage", function (message) {
+                if (self.handlers[message.op]) self.handlers[message.op](message.data)
+            })
+        },
+        setupChannelFramework: function () {
+            var self = this;
+            Messenger.sendMessage("channelSetup", {
+                src: (Streak.devRealtimeServer || Streak.server) + "/_ah/channel/jsapi"
+            }, "channelSetupReturn", function () {
+                self.connectChannel()
+            })
+        },
+        getToken: function (cb) {
+            var self = this;
+            Requester.getFile({
+                msgUrl: "/realtime/createChannelToken"
+            }, function (res) {
+                self.token = res.message;
+                if (cb) cb()
+            }, function (data, xhr) {
+                self.token = null;
+                if (xhr.status === 401) return true;
+                else if (cb) cb()
+            }, null, 0, true)
+        },
+        connectChannel: function () {
+            if (this.token) Messenger.sendMessage("channelConnect", {
+                token: this.token,
+                server: Streak.server
+            });
+            else this.backoff()
+        },
+        backoff: function () {
+            var self = this;
+            self.connectDelay = Math.min(self.connectDelay * 2, 16E3);
+            clearTimeout(this.connectTimeout);
+            this.connectTimeout = setTimeout(function () {
+                self.getToken(function () {
+                    self.connectChannel()
+                })
+            }, self.connectDelay)
+        }
+    };
+    var handleCase = function (json) {
+            var box;
+            switch (json.REALTIME_EVENT) {
+            case "CREATE":
+                var box = BB.Data.getBox(json.key);
+                if (!box) BB.Data.addNewBox(json.key, function () {
+                    BB.Data.getBox(json.key).trigger("change")
+                });
+                break;
+            case "DELETE":
+                var box = BB.Data.getBox(json.key);
+                if (box) {
+                    var key = box.get("workflowKey");
+                    box.trigger("delete");
+                    BB.Data.getPipelineBoxes(key).trigger("refreshed")
+                }
+                break;
+            case "UPDATE":
+                var box = BB.Data.getBox(json.key);
+                if (box) box.refresh();
+                else BB.Data.addNewBox(json.key, function () {
+                    BB.Data.getBox(json.key).trigger("change")
+                });
+                break
+            }
+        };
+    var handleWorkflow = function (json) {
+            switch (json.REALTIME_EVENT) {
+            case "NEW_ACL":
+            case "CREATE":
+            case "REMOVE_ACL":
+                BB.Data.getAllPipelines().refresh();
+                break;
+            case "DELETE":
+                BB.Data.removePipeline(json.key);
+                break;
+            case "UPDATE":
+                var pipe = BB.Data.getPipeline(json.key);
+                if (pipe) pipe.refresh();
+                else BB.Data.addNewPipeline(json.key);
+                break;
+            case "UPDATE_CASCADE":
+                var pipe = BB.Data.getPipeline(json.key);
+                if (pipe) BB.Data.getPipelineBoxes(json.key).refresh();
+                else BB.Data.addNewPipeline(json.key);
+                break
+            }
+        };
+    var handleComment = function (json) {
+            var box = BB.Data.getBox(json.caseKey);
+            if (box) box.refresh()
+        };
+    var handleReminder = function (json) {
+            var box = BB.Data.getBox(json.caseKey);
+            if (box) box.trigger("reminderRefresh")
+        };
+    var handleGmailThread = function (json) {
+            var box = BB.Data.getBox(json.caseKey);
+            if (box) BB.Data.getGmailThreadGroup(box.key()).refresh()
+        };
+    var handleSnippet = function (json) {
+            switch (json.REALTIME_EVENT) {
+            case "CREATE":
+            case "DELETE":
+                BB.Data.getAllSnippets().refresh();
+                break;
+            case "UPDATE":
+                var snippet = BB.Data.getSnippet(json.key);
+                if (snippet) snippet.refresh();
+                else BB.Data.getAllSnippets().refresh();
+                break
+            }
+        };
+    BB.ready(function (cb) {
+        BB.Realtime.init(cb)
+    })
+})(Streak);
+*/
 (function (Streak) {
     var $ = Streak.jQuery,
         BB = Streak.BentoBox,
@@ -17558,6 +17562,8 @@ delete Streak._underscore;
     })
 })(Streak);
 //BB End
+
+/*
 //BB Widget
 (function (Streak) {
     var $ = Streak.jQuery,
@@ -22882,7 +22888,7 @@ delete Streak._underscore;
     BB.onLoad($.proxy(BB.Widgets.ThreadTask.init, BB.Widgets.ThreadTask))
 })(Streak);
 //BB Widget
-
+*/
 //BB Modules
 /*
 

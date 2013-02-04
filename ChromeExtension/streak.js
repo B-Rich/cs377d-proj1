@@ -141,7 +141,7 @@ if (top.document == document) {
 }
 var Streak = {};
 Streak.clientVersion = "5.10";
-Streak.mixpanelToken = "80a136d926c66e6ecf8515b55c5beae2";
+Streak.mixpanelToken = "2571495d12e0773c350cab1c2446b8fb";
 Streak.analyticsToken = "UA-25304962-1";
 Streak.extVersion = Messenger.getData("extVersion");
 Streak.server = Messenger.getData("server");
@@ -18364,6 +18364,7 @@ delete Streak._underscore;
     BB.Widgets.IconButton = IconButton;
     BB.onLoad($.proxy(BB.Widgets.IconButton.init, BB.Widgets.IconButton))
 })(Streak);
+*/
 (function (Streak) {
     var $ = Streak.jQuery,
         _ = Streak._,
@@ -18512,6 +18513,7 @@ delete Streak._underscore;
     BB.Widgets.Modal = Modal;
     BB.onLoad($.proxy(Modal.init, Modal))
 })(Streak);
+/*
 (function (Streak) {
     var $ = Streak.jQuery,
         _ = Streak._,
@@ -20021,6 +20023,7 @@ delete Streak._underscore;
     };
     BB.onLoad($.proxy(BB.Widgets.FileList.init, BB.Widgets.FileList))
 })(Streak);
+
 (function (Streak) {
     var $ = Streak.jQuery,
         _ = Streak._,
@@ -20069,6 +20072,7 @@ delete Streak._underscore;
     };
     BB.onLoad($.proxy(BB.Widgets.FirstPipelinePromo.init, BB.Widgets.FirstPipelinePromo))
 })(Streak);
+
 (function (Streak) {
     var $ = Streak.jQuery,
         _ = Streak._,
@@ -26296,6 +26300,158 @@ delete Streak._underscore;
                     if (self.timeout) clearTimeout(self.timeout);
                     self.timeout = setTimeout(function () {
                         Requester.get({
+                            entityType: "EstimatedTime",
+                            hexGmailThreadIdList: JSON.stringify(hexIds)
+                        }, function (res) {
+                            if (res && res.length > 0) {
+                                var rows = Gmail.getVisibleThreadRows();
+ 
+                                self.preMarkIndicators();
+                                var shouldRefresh = false;
+                                $.each(res, function (index, box) {
+                                    if (hexIds[index] && BB.Threads.byId[hexIds[index]]) {
+                                        var isValid = false,
+                                            goodBox = null,
+                                            goodPipeline = null;
+                                        if (box) {
+                                            goodBox = BB.Data.getBox(box.caseKey);
+                                            goodPipeline = BB.Data.getPipeline(box.workflowKey);
+                                            if (goodPipeline) {
+                                                if (!goodBox) goodBox = BB.Data.addBox(box);
+                                                var threadBox = BB.Threads.byId[hexIds[index]].get("box");
+                                                if (!threadBox || threadBox.key() !== goodBox.key()) 
+                                                    BB.Threads.byId[hexIds[index]].set("box", goodBox);
+                                                BB.Data.registerBoxByHexID(hexIds[index], goodBox);
+                                                isValid = true
+                                            }
+                                        } else BB.Threads.byId[hexIds[index]].set("box", null);
+                                        if (isValid) self.addIndicator(rows[index], goodBox);
+                                        else self.removeIndicator(rows[index])
+                                    }
+                                });
+                                self.hideIndicators()
+                            }
+                        })
+                    }, 1000)
+                }
+            } catch (err) {
+                BB.logError("List Indicators error.", err)
+            }
+        },
+        showCached: function (hexIds) {
+            var rows = Gmail.getVisibleThreadRows();
+            for (var i = 0; i < rows.length; i++) if (rows[i] && rows[i].rowNode && rows[i].rowNode.data("thread") && rows[i].rowNode.data("thread").get("box")) this.addIndicator(rows[i], rows[i].rowNode.data("thread").get("box"))
+        },
+        addIndicator: function (rowObj, box) {
+            if (!rowObj || !box) return;
+            var self = this;
+            var row = rowObj.rowNode;
+            if (!row) return;
+            row.data("box", box);
+            if (row.find(".bentoBoxRow").length === 0) {
+                var color;
+                if (!color) color = {
+                    backgroundColor: "rgb(255, 173, 71)",
+                    textColor: "rgb(0, 0, 0)"
+                };
+                var tag = Gmail.widgets.getLabelTag("1:10", color.backgroundColor, color.textColor);
+                tag.addClass("bentoBoxRow");
+                tag.find(".at").prepend('<div style="background-color: ' + color.textColor + ';" class="maskedIcon"></div>');
+                rowObj.labelContainer.prepend(tag);
+            } else row.find(".bentoBoxRow").removeClass("toHide");
+            row.find(".bentoBoxRow").show()
+        },
+        preMarkIndicators: function () {
+            var self = this;
+            if (Gmail.isListView()) var rows = Gmail.getCurrentMain().find("tr.zA .bentoBoxRow").addClass("toHide")
+        },
+        hideIndicators: function () {
+            Gmail.getCurrentMain().find("tr.zA .bentoBoxRow.toHide").hide()
+        },
+        removeIndicators: function (row) {
+            Gmail.getCurrentMain().find("tr.zA .bentoBoxRow").hide()
+        },
+        removeIndicator: function (row) {
+            if (row && row.rowNode) row.rowNode.find(".bentoBoxRow").remove()
+        }
+    };
+    BB.ready(function (readyCB) {
+        ListIndicators.init(readyCB)
+    });
+    BB.Modules.ListIndicators = ListIndicators
+})(Streak); 
+
+/*
+(function (Streak) {
+    var $ = Streak.jQuery,
+        _ = Streak._,
+        Gmail = Streak.Gmail,
+        Requester = Streak.Requester,
+        BB = Streak.BentoBox;
+    var ListIndicators = {
+        template: null,
+        colIndex: -1,
+        initialized: false,
+        active: true,
+        refreshNeeded: true,
+        timeout: null,
+        init: function (readyCB) {
+            var self = this;
+            this.active = true;
+            if (!self.initialized) {
+                Gmail.observe("ajaxListRefresh", function () {
+                    self.refreshIndicators()
+                });
+                Gmail.observe("viewChanged", function () {
+                    if (Gmail.isSearch()) self.refreshIndicators();
+                    else if (Gmail.isListView()) if (self.refreshNeeded) self.refreshIndicators();
+                    self.refreshNeeded = true
+                });
+                Gmail.observe("previewPaneChanged", $.proxy(self.refreshIndicators, self));
+                Gmail.observe("listToggle", function (isOpen) {
+                    if (isOpen) self.refreshIndicators()
+                });
+                BB.Data.getAllBoxes().bind("collectionChange", $.proxy(self.refreshIndicators, self));
+                BB.Data.getAllBoxes().bind("threadChange", $.proxy(self.refreshIndicators, self));
+                BB.bind("logged_out", function () {
+                    self.active = false
+                })
+            }
+            self.initialized = true;
+            if (readyCB) readyCB()
+        },
+        teardown: function () {
+            Gmail.$("tr.zA .bentoBoxRow").hide()
+        },
+        refreshIndicators: function (attempts) {
+            if (!attempts) attempts = 1;
+            if (attempts > 2) {
+                this.removeIndicators();
+                return
+            }
+            var self = this;
+            if (!self.active) return;
+            try {
+                if (Gmail.isListView() && Gmail.getLiveView() !== Gmail.Constants.Drafts) {
+                    this.refreshNeeded = false;
+                    var hexIds = _.pluckPlus(BB.Threads.getCurrent(), function (thread) {
+                        return thread && thread.get && thread.get("encodedThreadId") ? thread.get("encodedThreadId") : null
+                    });
+                    var allNull = !_.any(hexIds, function (hexId) {
+                        return !!hexId
+                    });
+                    if (allNull && BB.Threads.getCurrent().length > 0) {
+                        BB.Threads.requestCurrentList(function () {
+                            self.refreshIndicators(attempts + 1)
+                        });
+                        return
+                    }
+                    try {
+                        self.showCached()
+                    } catch (err) {}
+                    if (self.timeout) clearTimeout(self.timeout);
+                    self.timeout = setTimeout(function () {
+                        Requester.get({
                             entityType: "Case",
                             hexGmailThreadIdList: JSON.stringify(hexIds)
                         }, function (res) {
@@ -26399,6 +26555,7 @@ delete Streak._underscore;
     });
     BB.Modules.ListIndicators = ListIndicators
 })(Streak); 
+*/
 /*
 
 (function (Streak) {
@@ -29221,10 +29378,10 @@ delete Streak._underscore;
                         self.elements.menu.connected.show();
                         BB.FirstRun.showStage1Modal()
                     } else self.elements.menu.connected.show();
-                    var promo = BB.Widgets.FirstPipelinePromo.create({
-                        width: "300px"
-                    });
-                    self.elements.menu.connectedNoPipelines.append(promo.el)
+                   // var promo = BB.Widgets.FirstPipelinePromo.create({
+                   //     width: "300px"
+                   // });
+                   // self.elements.menu.connectedNoPipelines.append(promo.el)
                 });
                 readyCB()
             })

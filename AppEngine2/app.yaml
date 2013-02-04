@@ -1,7 +1,12 @@
 application: lime-time
-version: 4
-runtime: python
+version: 5
+runtime: python27
 api_version: 1
+threadsafe: no
+
+libraries:
+- name: django
+  version: "1.2"
 
 handlers:
 - url: /build
@@ -12,4 +17,10 @@ handlers:
   upload: static/locale.json
 
 - url: /ajaxcalls/(.*)
+  script: main.py
+
+- url: /oauth/start(.*)
+  script: main.py
+
+- url: /imapoauth_step(.*)
   script: main.py

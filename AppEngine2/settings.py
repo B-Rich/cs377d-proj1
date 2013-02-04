@@ -8,8 +8,13 @@
 # key and secret in the settings tab of the console:
 # https://console.context.io/#settings
 
-CONTEXTIO_OAUTH_KEY = '8k5h0si0'
-CONTEXTIO_OAUTH_SECRET = 'SwgMutBm53djKvot'
+## Amber's 
+#CONTEXTIO_OAUTH_KEY = '8k5h0si0'
+#CONTEXTIO_OAUTH_SECRET = 'SwgMutBm53djKvot'
+
+## Zhe Yang's
+CONTEXTIO_OAUTH_KEY = 'om7v6hy2'
+CONTEXTIO_OAUTH_SECRET = 'Y55MszmMQ8vjqSsF'
 CONTEXTIO_API_URL = 'https://api.context.io'
 
 # Your Google Data API consumer key and secret. These are used

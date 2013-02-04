@@ -16814,9 +16814,9 @@ delete Streak._underscore;
                 confirmFunc: $.noop,
                 maxHeight: "600px",
                 onClose: function () {
-                    BB.Modules.BoxesButton.el.css({
-                        zIndex: "1"
-                    })
+                  //  BB.Modules.BoxesButton.el.css({
+                  //      zIndex: "1"
+                  //  })
                 }
             });
             this.s3modal = BB.Widgets.Modal.create({
@@ -16832,7 +16832,7 @@ delete Streak._underscore;
             self["showStage" + (stage ? stage : self.getStage()) + "Modal"]()
         },
         showStage1Modal: function () {
-            BB.Modules.LeftLink.newPipelineShow()
+//            BB.Modules.LeftLink.newPipelineShow()
         },
         showStage2Modal: function () {
             BB.Modules.BoxesButton.el.css({
@@ -26310,22 +26310,7 @@ delete Streak._underscore;
                                 var shouldRefresh = false;
                                 $.each(res, function (index, box) {
                                     if (hexIds[index] && BB.Threads.byId[hexIds[index]]) {
-                                        var isValid = false,
-                                            goodBox = null,
-                                            goodPipeline = null;
-                                        if (box) {
-                                            goodBox = BB.Data.getBox(box.caseKey);
-                                            goodPipeline = BB.Data.getPipeline(box.workflowKey);
-                                            if (goodPipeline) {
-                                                if (!goodBox) goodBox = BB.Data.addBox(box);
-                                                var threadBox = BB.Threads.byId[hexIds[index]].get("box");
-                                                if (!threadBox || threadBox.key() !== goodBox.key()) 
-                                                    BB.Threads.byId[hexIds[index]].set("box", goodBox);
-                                                BB.Data.registerBoxByHexID(hexIds[index], goodBox);
-                                                isValid = true
-                                            }
-                                        } else BB.Threads.byId[hexIds[index]].set("box", null);
-                                        if (isValid) self.addIndicator(rows[index], goodBox);
+                                        if (box) self.addIndicator(rows[index], "1:10");
                                         else self.removeIndicator(rows[index])
                                     }
                                 });

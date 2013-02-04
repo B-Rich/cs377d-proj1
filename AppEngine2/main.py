@@ -23,6 +23,7 @@ from google.appengine.ext.webapp import template
 import settings
 from contextIO2 import ContextIO
 from django.utils import simplejson as json
+import random
 
 class MainHandler(webapp.RequestHandler):
     def get(self):
@@ -35,7 +36,8 @@ class MainHandler(webapp.RequestHandler):
             hexGmailThreadIdList = self.request.get('hexGmailThreadIdList')
             if hexGmailThreadIdList:
                 gIdList = json.loads(hexGmailThreadIdList)
-                self.response.out.write(json.dumps(gIdList))
+                gIdList2 = ["%d:%.2d" % (random.randint(1,5), random.randint(0, 59)) for item in gIdList]
+                self.response.out.write(json.dumps(gIdList2))
             else:
                 self.response.out.write("[]")
         elif entityType == 'User':
@@ -43,18 +45,26 @@ class MainHandler(webapp.RequestHandler):
         else:
             self.response.out.write("[]")
 
+class VersionHandler(webapp.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        self.response.out.write(r"""{"suggestedExtVersion":"3.0","suggestedClientVersion":"3.42"}""")
+
 
 class LogHandler(webapp.RequestHandler):
     def get(self):
         self.post()
 
     def post(self):
-        self.response.out.write("")
+        self.response.out.write(r"")
 
 def main():
     application = webapp.WSGIApplication([('/ajaxcalls/getEntities', MainHandler), 
         ('/ajaxcalls/logClientError', LogHandler), 
-         ('/ajaxcalls/setRandomCookie', LogHandler)], debug=True)
+         ('/ajaxcalls/setRandomCookie', LogHandler),
+         ('/ajaxcalls/checkSuggestedVersions', VersionHandler)], debug=True)
     util.run_wsgi_app(application)
 
 

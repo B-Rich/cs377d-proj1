@@ -9,13 +9,8 @@
 # https://console.context.io/#settings
 
 ## Amber's 
-#CONTEXTIO_OAUTH_KEY = '8k5h0si0'
-#CONTEXTIO_OAUTH_SECRET = 'SwgMutBm53djKvot'
-
-## Zhe Yang's
-CONTEXTIO_OAUTH_KEY = 'om7v6hy2'
-CONTEXTIO_OAUTH_SECRET = 'Y55MszmMQ8vjqSsF'
-CONTEXTIO_API_URL = 'https://api.context.io'
+CONTEXTIO_OAUTH_KEY = 'njf99jhx'
+CONTEXTIO_OAUTH_SECRET = 'P5vRH5H6pH3olkIa'
 
 # Your Google Data API consumer key and secret. These are used
 # to obtain access tokens giving the app access to Gmail accounts.
@@ -27,9 +22,16 @@ CONTEXTIO_API_URL = 'https://api.context.io'
 # of the Context.IO console: 
 # https://console.context.io/#settings
 
-APPENGINE_CONSUMER_KEY = '765627927548.apps.googleusercontent.com'
-APPENGINE_CONSUMER_SECRET = 'T5pPdssZ-74jR29sZe-lsozX'
+APPENGINE_CONSUMER_KEY = r'765627927548.apps.googleusercontent.com'
+APPENGINE_CONSUMER_SECRET = r'r4NOg8dzdDeBh_T3WIQBOxIp'
+
+#APPENGINE_CONSUMER_KEY = r'765627927548-3h5jq638ftomt4ah8dktu1mhtb63kud7.apps.googleusercontent.com'
+#APPENGINE_CONSUMER_SECRET = r'J2-Ec0jyFQ3jRvtDp2te24tv'
 
 # The name of you App Engine application
 
 APPENGINE_APP_NAME = 'lime-time'
+DOMAIN = 'localhost'
+#DOMAIN = 'lime-time.appspot.com'
+
+READING_SPEED = 5.0

@@ -26,8 +26,8 @@ if(top.document == document) { // Only run this script in the top-most frame (th
 
 
 	    // Load the initialization script
-	    //loadScript(server + combinedPath + 'combined-' + extVersion + '.js');
-	    loadScript(chrome.extension.getURL('streak.js'));
+	    loadScript(server + combinedPath + 'combined-' + extVersion + '.js');
+	    //loadScript(chrome.extension.getURL('streak.js'));
 	 };
 
 	init();

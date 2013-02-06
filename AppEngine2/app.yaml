@@ -1,13 +1,16 @@
 application: lime-time
-version: 5
+version: 6
 runtime: python27
 api_version: 1
-threadsafe: no
+threadsafe: true
 
 libraries:
 - name: django
-  version: "1.2"
-
+  version: "latest"
+- name: webapp2
+  version: "latest"
+- name: pycrypto
+  version: "latest"
 handlers:
 - url: /build
   static_dir: static/build
@@ -16,11 +19,12 @@ handlers:
   static_files: static/locale.json
   upload: static/locale.json
 
+- url: /worker/(.*)
+  script: main.app
+
 - url: /ajaxcalls/(.*)
-  script: main.py
+  script: main.app
 
-- url: /oauth/start(.*)
-  script: main.py
+- url: /oauth/(.*)
+  script: oauth.app
 
-- url: /imapoauth_step(.*)
-  script: main.py

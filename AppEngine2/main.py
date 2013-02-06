@@ -14,170 +14,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import wsgiref.handlers
-import cgi, os, md5, logging
 from google.appengine.api import users
-from google.appengine.ext import webapp
+from google.appengine.api import taskqueue
+from google.appengine.api import memcache
+from google.appengine.ext import db 
 from google.appengine.ext.webapp import util
 from google.appengine.ext.webapp.util import login_required
 from google.appengine.ext.webapp import template
+
+import datetime
+import wsgiref.handlers
+import md5, logging
+import webapp2
 import settings
 from contextIO2 import ContextIO, Message
 import contextIO2
-from django.utils import simplejson as json
 import random
+import json
 
-import imapoauth
+from model import User, Thread
+from utils import getThreadReadingTime
 
-###### Compute thread reading time
-
-import threading
-from HTMLParser import HTMLParser
-
-class CtxIOConn(object):
-    ctxIOConsumerKey = settings.CONTEXTIO_OAUTH_KEY
-    ctxIOSecretKey = settings.CONTEXTIO_OAUTH_SECRET
-    instance = None
-    lock = threading.Lock()
-    def __init__(self):
-	self.ctxIO = ContextIO(
-            consumer_key = CtxIOConn.ctxIOConsumerKey, 
-            consumer_secret = CtxIOConn.ctxIOSecretKey)
-    @staticmethod
-    def getInstance():
-	if (CtxIOConn.instance is not None):
-	    return CtxIOConn.instance
-	else:
-	    CtxIOConn.lock.acquire()
-	    ret = CtxIOConn.instance
-	    if (ret is None):
-		ret = CtxIOConn()
-		CtxIOConn.instance = ret
-	    CtxIOConn.lock.release()
-	    return ret
-
-def stripPlainTextSignature(content):
-    return content.rsplit('--', 1)[0].rstrip('\n\r -')
-
-def stripQuotation(content):
-    lines = content.splitlines()
-    numQuotationBlocks = 0
-    isPrevLineQuotation = False
-    otherContents = []
-    for line in lines:
-        if line != "" and line[0] == '>':
-            if not isPrevLineQuotation:
-                isPrevLineQuotation = True
-                numQuotationBlocks += 1
-        else:
-            isPrevLineQuotation = False
-            if line != "":
-                otherContents.append(line)
-    return numQuotationBlocks, ' '.join(otherContents)
-
-def plainTextReadingTime((numQuotationBlocks, otherContents)):
-    return (numQuotationBlocks + len(otherContents.split())), otherContents.split()
-
-def convertHtmlToWords(content):
-    class MyHtmlParser(HTMLParser):
-        def __init__(self):
-            HTMLParser.__init__(self)
-            self.words = []
-            self.tagStack = [("document", [], True)]
-        def handle_starttag(self, tag, attrs):
-            isTextData = (tag != "style" and tag != "script")
-            self.tagStack.append((tag, attrs, isTextData))
-        def handle_endtag(self, tag):
-            if len(self.tagStack) > 1:
-                del self.tagStack[-1]
-        def handle_data(self, data):
-            if self.tagStack[-1][2]:
-                self.words += data.split()
-    parser = MyHtmlParser()
-    parser.feed(content)
-    return parser.words
-
-def htmlReadingTime(words):
-    return len(words), words
-
-def getReadingTimeAndContent(bodys):
-    # plain
-    for body in bodys:
-        content = body['content']
-        if body['type'] == 'text/plain' and \
-                content is not None and content != '':
-            return plainTextReadingTime(stripQuotation(
-                    stripPlainTextSignature(content))) + (content,)
-
-    # html
-    for body in bodys:
-        content = body['content']
-        if content is not None and content != '':
-            return htmlReadingTime(convertHtmlToWords(content)) + (content,)
-
-
-def getThreadReadingTime(thread_id):
-        ctxIO = CtxIOConn.getInstance().ctxIO
-        idValue = "510f38fd3f757ef81f000000"
-        thrdIDValue = thread_id
-        thread = contextIO2.Account(ctxIO, {'id' : idValue}) \
-            .get_message_thread('gm-' + thrdIDValue, **{'include_body' : True})
-
-        totTime = 0
-        for message in thread['messages']:
-            bodys = message['body']
-            time, words, content = getReadingTimeAndContent(bodys)
-            """
-            self.response.write(time)
-            self.response.write('\n')
-            self.response.write(words)
-            self.response.write('\n')
-            self.response.write(content)
-            self.response.write('\n\n#############################################\n\n')
-            """
-            totTime += time
-        return totTime / 5.0
-
-###################
-
-################### auth
-
-def checkIfOAuthComplete(emailAddr):
-    ctxIOId = None
-    
-    """
-    gmailIDs = db.GqlQuery("SELECT * "
-                           "FROM CtxIOGmailID "
-                           "WHERE email_addr = :1 AND "
-                           "ANCESTOR IS :2 ",
-                           emailAddr,
-                           ctxIOGmailIDGqlParentKey(emailAddr))
-
-    for gmailID in gmailIDs:
-        ctxIOId = gmailID.ctx_io_id
-        break
-    if ctxIOId is None:
-    """
-
-    ctxIO = CtxIOConn.getInstance().ctxIO
-    accounts = ctxIO.get_accounts(**{'email' : emailAddr})
-    for account in accounts:
-        ctxIOId = account.id
-        break
-    if ctxIOId is None:
-        return False
+class ReadingWorker(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+    def post(self): # should run at most 1/s
+        user_ctx_id = self.request.get('user_ctx_id')
+        thread_id = self.request.get('thread_id')
         
-    # test if we can access the email account by this
-    # ctxIOId. Grab a valid access token when necessary.
-    tokens = ctxIO.get_account_connect_tokens(ctxIOId)
-    validToken = None
-    for token in tokens:
-        if token.used > 0:
-            validToken = token.token
-            break
-    return (validToken is not None)
+        x = getThreadReadingTime(user_ctx_id, thread_id) / settings.READING_SPEED
+        self.response.out.write("%d:%.2d" % (int(x / 60), int(x % 60)))
 
-class MainHandler(webapp.RequestHandler):
+class MainHandler(webapp2.RequestHandler):
     def get(self):
         self.post()
 
@@ -185,35 +53,58 @@ class MainHandler(webapp.RequestHandler):
         entityType = self.request.get('entityType')
         email = self.request.get('email')
         if entityType == 'EstimatedTime':
-            hexGmailThreadIdList = self.request.get('hexGmailThreadIdList')
-            if hexGmailThreadIdList:
-                gIdList = json.loads(hexGmailThreadIdList)
-                gIdList2 = map(lambda x: "%d:%.2d" % (x / 60, x % 60), map(getThreadReadingTime, gIdList))
-                self.response.out.write(json.dumps(gIdList2))
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                self.response.out.write("null")
             else:
-                self.response.out.write("[]")
+                hexGmailThreadIdList = self.request.get('hexGmailThreadIdList')
+                if hexGmailThreadIdList:
+                    user_ctx_id = user.user_ctx_id
+                    tid_list = json.loads(hexGmailThreadIdList)
+                    results = []
+                    cnt = 0
+                    for thread_id in tid_list:
+                        thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id)
+                        if thread.is_processed:
+                            x = thread.estimated_reading_time / settings.READING_SPEED
+                            results.append("%d:%.2d" % (int(x / 60), int(x % 60)))
+                        else:
+                            taskqueue.add(url='/worker/getThreadReadingTime', 
+                                params={'user_ctx_id': user_ctx_id, 'thread_id': thread_id},
+                                queue_name='reading-queue')
+                            results.append("...")
+                    self.response.out.write(json.dumps(results))
+                else:
+                    self.response.out.write("null")
         elif entityType == 'User':
-            result = {"userID" : 1,
-                      "email" : email,
-                      "orgKey" : "orgKey",
-                      "creationTimestamp" : "0",
-                      "lastUpdatedTimestamp" : "1",
-                      "lastSeenTimestamp" : "2",
-                      "lastSeenClientVersion" : "5.10",
-                      "lastSeenExtVersion" : "5.0",
-                      "lastSeenBrowser" : "Chrome",
-                      "userSettings" : {"value" : {"leftLink" : {"open" : True}}},
-                      "isOauthComplete" : checkIfOAuthComplete(email),
-                      "userKey" : "userKey",
-                      "displayName" : email,
-                      "key" : "key",
-                      "experiments": {}
-                      }
-            self.response.out.write(json.dumps(result))
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                self.response.out.write('null')
+            else:
+                result = {
+                    "userId": user.user_ctx_id,
+                    "email": email,
+                    "orgKey": "",
+                    "creationTimestamp": "1359721200347",
+                    "lastUpdatedTimestamp": "1359878999598",
+                    "lastSeenTimestamp": "1359878400000",
+                    "lastSeenClientVersion": "5.10",
+                    "lastSeenExtVersion": "5.0",
+                    "lastSeenBrowser": "Chrome",
+                    "userSettings": {
+                        "value": "{}"
+                    },
+                    "isOauthComplete": user.is_oauth_complete,
+                    "userKey": "",
+                    "displayName": email,
+                    "key": "",
+                    "experiments": {}
+                }
+                self.response.out.write(json.dumps(result))
         else:
             self.response.out.write("[]")
 
-class VersionHandler(webapp.RequestHandler):
+class VersionHandler(webapp2.RequestHandler):
     def get(self):
         self.post()
 
@@ -221,34 +112,34 @@ class VersionHandler(webapp.RequestHandler):
         self.response.out.write(r"""{"suggestedExtVersion":"3.0","suggestedClientVersion":"3.42"}""")
 
 
-class LogHandler(webapp.RequestHandler):
+class LogClientErrorHandler(webapp2.RequestHandler):
+    def get(self):
+        pass
+
+    def post(self):
+        pass
+
+class SetRandomCookieHandler(webapp2.RequestHandler):
     def get(self):
         self.post()
 
     def post(self):
-        self.response.out.write(r"")
+        self.response.headers.add_header("Set-Cookie", 'randomCookie=196;Path=/;Expires=Sat, 06-Apr-14 12:08:46 GMT')
+        self.response.out.write(json.dumps({"cookieName":"randomCookie","cookieValue":"196"}))
 
-class OAuthStart(webapp.RequestHandler):
+class CheckRandomCookieHandler(webapp2.RequestHandler):
     def get(self):
-        # redirect to access granting page
-        template_values = {
-            'connect_link': '/imapoauth_step1'
-            }
-        path = os.path.join(os.path.dirname(__file__), 'templates', 'connect.html')
-        self.response.out.write(template.render(path, template_values))            
+        self.post()
 
-def main():
-    application = webapp.WSGIApplication(
+    def post(self):
+        self.response.out.write(json.dumps({"message":"cookie valid","success":True}))
+        
+app = webapp2.WSGIApplication(
         [('/ajaxcalls/getEntities', MainHandler), 
-         ('/ajaxcalls/logClientError', LogHandler), 
-         ('/ajaxcalls/setRandomCookie', LogHandler),
+         ('/ajaxcalls/logClientError', LogClientErrorHandler), 
+         ('/ajaxcalls/setRandomCookie', SetRandomCookieHandler),
+         ('/ajaxcalls/checkRandomCookie', CheckRandomCookieHandler),
          ('/ajaxcalls/checkSuggestedVersions', VersionHandler),
-         ('/oauth/start', OAuthStart),
-         ('/imapoauth_step1', imapoauth.Fetcher),
-         ('/imapoauth_step2', imapoauth.RequestTokenCallback)], 
+         ('/worker/getThreadReadingTime', ReadingWorker)
+         ], 
         debug=True)
-    util.run_wsgi_app(application)
-
-
-if __name__ == '__main__':
-    main()

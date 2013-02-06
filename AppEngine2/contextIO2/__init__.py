@@ -19,7 +19,7 @@ class ContextIO(object):
         response, body = self.request(url, method, params, headers)
         status = int(response['status'])
 
-        if status >= 200 and status < 300:
+        if (status >= 200 and status < 300) or status == 409:
             body = json.loads(body)
             return body
 
@@ -32,20 +32,16 @@ class ContextIO(object):
             url += '?' + urlencode(params)
         elif method == 'POST' and params:
             body = urlencode(params)
-        print "{method} {url}".format(url=url, method=method)
+        #print "{method} {url}".format(url=url, method=method)
         return self.client.request(url, method, headers=headers, body=body)
 
     def get_accounts(self, **params):
         params = Resource.sanitize_params(params, ['email', 'status', 'status_ok', 'limit', 'offset'])
         return [Account(self, obj) for obj in self.request_uri('accounts', params=params)]
 
-    def post_account(self, email, first_name=None, last_name=None):
-        params = {}
+    def post_account(self, email, **params):
+        params = Resource.sanitize_params(params, ['first_name', 'last_name'])
         params['email'] = email
-        if first_name is not None:
-            params['first_name'] = first_name
-        if last_name is not None:
-            params['last_name'] = last_name
         return Account(self, self.request_uri('accounts', method="POST", params=params))
 
     def delete_account(self, account_id):
@@ -163,11 +159,12 @@ class Account(Resource):
         obj = self.request_uri('messages/%s/thread' % message_id, params=params)
         return obj
 
-    def get_sources(self):
-        return self.request_uri('sources')
+    def get_sources(self, **params):
+        params = Resource.sanitize_params(params, ['status', 'status_ok'])
+        return self.request_uri('sources', params=params)
 
     def post_source(self, email, server, username, use_ssl=True, port='993', type='imap', **params):
-        params = Resource.sanitize_params(params, ['service_level', 'sync_period', 'password', 'provider_token', 'provider_token_secret', 'provider_consumer_key'])
+        params = Resource.sanitize_params(params, ['service_level', 'sync_period', 'password', 'provider_token', 'provider_token_secret', 'provider_consumer_key', 'provider_refresh_token'])
         params['email'] = email
         params['server'] = server
         params['username'] = username

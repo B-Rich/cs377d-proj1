@@ -7,10 +7,10 @@
       "matches": [ "https://mail.google.com/*", "http://mail.google.com/*" ],
       "run_at": "document_end"
    } ],
-   "content_security_policy": "script-src 'self' https://*.google.com https://*.lime-time.appspot.com https://lime-time.appspot.com  https://*.mailfoogae.appspot.com https://mailfoogae.appspot.com http://localhost; object-src 'self'",
+   "content_security_policy": "script-src 'self' https://*.google.com https://*.lime-time.appspot.com https://lime-time.appspot.com  https://*.mailfoogae.appspot.com https://mailfoogae.appspot.com http://localhost https://localhost; object-src 'self'",
    "default_locale": "en",
    "description": "__MSG_appDesc__",
-   "homepage_url": "http://www.streak.com",
+   "homepage_url": "https://lime-time.appspot.com",
    "icons": {
       "128": "webstoreIcon128.png",
       "16": "webstoreIcon16.png",
@@ -20,7 +20,7 @@
    "manifest_version": 2,
    "minimum_chrome_version": "15.0",
    "name": "__MSG_appName__",
-   "permissions": [ "cookies", "management", "*://mail.google.com/", "*://mailfoogae.appspot.com/", "*://*.mailfoogae.appspot.com/", "*://lime-time.appspot.com/", "*://*.lime-time.appspot.com/" ],
+   "permissions": [ "cookies", "management", "*://mail.google.com/", "*://mailfoogae.appspot.com/", "*://*.mailfoogae.appspot.com/", "*://lime-time.appspot.com/", "*://*.lime-time.appspot.com/", "*://localhost/" ],
    "update_url": "http://clients2.google.com/service/update2/crx",
    "version": "5.0",
    "web_accessible_resources": [ "blank.png", "streak.js", "combined-5.0.html" ]

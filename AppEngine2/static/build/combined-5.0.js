@@ -13148,6 +13148,7 @@ delete Streak._underscore;
                     getList: function () {
                         return a
                     },
+                    isRead: e(d[g]).hasClass('yO'),
                     checked: 0 < e(d[g]).find("input[type=checkbox]:checked, div[role=checkbox][aria-checked=true]").length
                 };
                 "horizontal" === b && (f.checked = f.checked || f.rowNode.hasClass("aps"), f.previewed = f.rowNode.hasClass("aps"));
@@ -13188,7 +13189,8 @@ delete Streak._underscore;
         },
         getVisibleThreadRows: function () {
             if (this.isListView()) {
-                for (var a = [], b = this.getCurrentMain().find("[gh=tl]"), c = 0; c < b.length; c++) var d = e(b[c]),
+                for (var a = [], b = this.getCurrentMain().find("[gh=tl]"), c = 0; c < b.length; c++) 
+                    var d = e(b[c]),
                     a = b[c].getAttribute("class").has("aia") ? 0 < d.find(".nn").length ? a.concat(this.getVerticalListRows(d)) : a.concat(this.getListRows(d, "horizontal")) : a.concat(this.getListRows(d));
                 return a
             }
@@ -17724,6 +17726,97 @@ delete Streak._underscore;
         Gmail = Streak.Gmail,
         Requester = Streak.Requester,
         BB = Streak.BentoBox;
+    var ReadingTimeCounter = {
+        initialized: false,
+        active: false,
+        paused: false,
+        elapsedTime: null,
+        startTime: null,
+        conversationId: null, 
+        init: function (readyCB) {
+            self = this;
+            if (!this.initialized) {
+                this.initialized = true;
+                Gmail.observe("viewChanged", function () {
+                    if (Gmail.isConversation()) {
+                        self.conversationId = Gmail.getConversationId();
+                        self.startTimer();
+                        window.focus();
+                    } else {
+                        if (self.conversationId != null) {
+                            self.stopTimer();
+                            //FIXME
+                            //$('#workflowReadingTimeCount')[0].innerHTML = ' ' + self.getTimeFormat(self.elapsedTime);
+                            Requester.update({entityType: "ReadingTime",
+                                threadId: self.conversationId, 
+                                elapsedTime: self.elapsedTime});
+                            self.conversationId = null;
+                        }
+                    }
+                });
+
+                window.addEventListener("focus", function(event) { self.resumeTimer(); }, false);
+                window.addEventListener("blur", function(event) { self.pauseTimer(); }, false);
+
+                BB.bind("logged_out", function () {
+                    self.initialized = false;
+                });
+            }
+            if (readyCB) readyCB()
+        },
+        resumeTimer: function() {
+            if (this.active && this.paused) {
+                this.paused = false;
+                this.startTime = new Date().getTime();
+                //FIXME
+                //$('#workflowReadingTimeCount')[0].innerHTML = ' ' + self.getTimeFormat(self.elapsedTime) + 's';
+            }
+        },
+        pauseTimer: function() {
+            if (this.active && !this.paused) {
+                this.paused = true;
+                this.elapsedTime += new Date().getTime() - this.startTime;
+                this.startTime = null;
+                //FIXME
+               // $('#workflowReadingTimeCount')[0].innerHTML = ' ' + self.getTimeFormat(self.elapsedTime) + 'p';
+            }
+        },
+        startTimer: function () {
+            if (this.conversationId != null) {
+                this.active = true;
+                this.paused = false;
+                this.elapsedTime = 0;
+                this.startTime = new Date().getTime();
+            }
+        },
+        stopTimer: function () {
+            if (this.conversationId  != null) {
+                this.pauseTimer();
+                this.active = false;
+            }
+        },
+        getTimeFormat: function (timeInMillSec) {
+            sec_numb    = Math.floor(parseInt(timeInMillSec) / 1000);
+            var hours   = Math.floor(sec_numb / 3600);
+            var minutes = Math.floor((sec_numb - (hours * 3600)) / 60);
+            var seconds = sec_numb - (hours * 3600) - (minutes * 60);
+
+            if (seconds < 10) {seconds = "0"+seconds;}
+            return minutes+':'+seconds;
+        }
+    };
+    BB.ready(function (readyCB) {
+        ReadingTimeCounter.init(readyCB)
+    });
+    BB.Modules.ReadingTimeCounter = ReadingTimeCounter
+})(Streak); 
+
+(function (Streak) {
+    var $ = Streak.jQuery,
+        _ = Streak._,
+        Gmail = Streak.Gmail,
+        Requester = Streak.Requester,
+        BB = Streak.BentoBox;
     var ListIndicators = {
         template: null,
         colIndex: -1,
@@ -17759,6 +17852,15 @@ delete Streak._underscore;
         teardown: function () {
             Gmail.$("tr.zA .bentoBoxRow").hide()
         },
+        getTimeFormat: function (timeInMillSec) {
+            sec_numb    = Math.floor(parseInt(timeInMillSec) / 1000);
+            var hours   = Math.floor(sec_numb / 3600);
+            var minutes = Math.floor((sec_numb - (hours * 3600)) / 60);
+            var seconds = sec_numb - (hours * 3600) - (minutes * 60);
+
+            if (seconds < 10) {seconds = "0"+seconds;}
+            return minutes+':'+seconds;
+        },
         refreshIndicators: function (attempts) {
             if (!attempts) attempts = 1;
             if (attempts > 2) {
@@ -17782,26 +17884,44 @@ delete Streak._underscore;
                         });
                         return
                     }
+                    var rows = Gmail.getVisibleThreadRows();
+                    var request_hexIds = hexIds;
+                    $.each(rows, function (index, row) {
+                        if (row.isRead)
+                            request_hexIds[index] = null
+                    });
                     try {
                         self.showCached()
                     } catch (err) {}
+
                     if (self.timeout) clearTimeout(self.timeout);
                     self.timeout = setTimeout(function () {
                         Requester.get({
                             entityType: "EstimatedTime",
-                            hexGmailThreadIdList: JSON.stringify(hexIds)
+                            hexGmailThreadIdList: JSON.stringify(request_hexIds)
                         }, function (res) {
                             if (res && res.length > 0) {
                                 var rows = Gmail.getVisibleThreadRows();
- 
                                 self.preMarkIndicators();
                                 var shouldRefresh = false;
+                                var totalTime = 0;
                                 $.each(res, function (index, box) {
-                                    if (hexIds[index] && BB.Threads.byId[hexIds[index]]) {
-                                        if (box) self.addIndicator(rows[index], box);
-                                        else self.removeIndicator(rows[index])
+                                    if (request_hexIds[index] && BB.Threads.byId[hexIds[index]]) {
+                                        if (box) {
+                                            var timeElasped = parseInt(box);
+                                            if (timeElasped >= 0) {
+                                                totalTime += timeElasped;
+                                                self.addIndicator(rows[index], self.getTimeFormat(timeElasped));
+                                            } else {
+                                                self.addIndicator(rows[index], "...");
+                                            }
+                                        }
+                                        else {
+                                            self.removeIndicator(rows[index])
+                                        }
                                     }
                                 });
+                                BB.Modules.TopNav.showUnreadCount(self.getTimeFormat(totalTime));
                                 self.hideIndicators()
                             }
                         })
@@ -17813,7 +17933,20 @@ delete Streak._underscore;
         },
         showCached: function (hexIds) {
             var rows = Gmail.getVisibleThreadRows();
-            for (var i = 0; i < rows.length; i++) if (rows[i] && rows[i].rowNode && rows[i].rowNode.data("thread") && rows[i].rowNode.data("thread").get("box")) this.addIndicator(rows[i], rows[i].rowNode.data("thread").get("box"))
+            var totalTime = 0;
+            for (var i = 0; i < rows.length; i++) 
+                if (rows[i] && rows[i].rowNode && !rows[i].isRead && rows[i].rowNode.data("thread") && rows[i].rowNode.data("thread").get("box")) {
+                    var box = rows[i].rowNode.data("thread").get("box");
+                    var timeElasped = parseInt(box);
+
+                    if (timeElasped >= 0) {
+                        totalTime += timeElasped;
+                        this.addIndicator(rows[i], this.getTimeFormat(timeElasped));
+                    } else {
+                        this.addIndicator(rows[index], "...");
+                    }
+                }
+            BB.Modules.TopNav.showUnreadCount(this.getTimeFormat(totalTime));
         },
         addIndicator: function (rowObj, box) {
             if (!rowObj || !box) return;
@@ -17931,6 +18064,7 @@ delete Streak._underscore;
                 self.loggedOut = false;
                 BB.bind("allready", function () {
                     self._isMessage = false;
+
                     self.elements.menu.find("#workflowMenuMessage").hide();
                     self.elements.menu.find("#workflowMenuDefaultInner").show();
                     self.elements.mainLink.exclamation.hide();
@@ -18000,6 +18134,8 @@ delete Streak._underscore;
                 e.preventDefault();
                 window.open("http://mail.google.com/mail/?view=cm&fs=1&tf=1&to=me%40botao.hu", "Compose Mail", "scrollbars=auto,width=600,height=700,status=yes,resizable=yes,toolbar=no")
             });
+            self.elements.menu.find(".releaseNotes a").attr("href", "https://lime-time.appspot.com/").attr("target", "_blank");
+
             self.elements.menu.find("a").easyHoverClass("gbqfb-hvr");
             Gmail.addTimerObserver(self.versionCheck.bind(this), 36E5)
         },
@@ -18171,6 +18307,10 @@ delete Streak._underscore;
                 BB.isError = true;
                 self.showExclamation()
             })
+        },
+        showUnreadCount: function (unread) {
+            var self = this;
+            self.elements.mainLink.find("#workflowUnreadCount")[0].innerHTML = ' (' + unread + ')';
         },
         versionCheck: function () {
             var param = {

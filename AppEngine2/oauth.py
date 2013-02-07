@@ -45,10 +45,9 @@ class CallbackHandler(webapp2.RequestHandler):
     if error:
       errormsg = self.request.get('error_description', error)
       self.response.out.write(
-        'The authorization request failed: %s' % _safe_html(errormsg))
+        'The authorization request failed: %s' % errormsg)
     else:
       user_email = str(self.request.get('state'))
-      logging.info('st:%s cu:%s' % (user_email, users.get_current_user().email()))
       redirect_uri = 'https://%s/oauth/grantAccess/%s/' % (self.request.host, user_email)
       if user_email:
         flow = createFlow(self, user_email)
@@ -62,7 +61,6 @@ class GrantAccessHandler(webapp2.RequestHandler):
   def get(self, user_email):
     flow = createFlow(self, user_email)
     credentials = StorageByKeyName(CredentialsModel, user_email, 'credentials').get()
-    logging.info('st:%s cu:%s' % (user_email, users.get_current_user().email()))
 
     if credentials:
       user = User.get_by_key_name(user_email)

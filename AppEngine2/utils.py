@@ -1,33 +1,10 @@
 #!/usr/bin/env python
 
-import threading
-import settings
-from contextIO2 import ContextIO
+import string
+from html2text import HTML2Text
+import re
 from HTMLParser import HTMLParser
-from model import Thread, Message, User
-import contextIO2
 
-class CtxIOConn(object):
-    ctxIOConsumerKey = settings.CONTEXTIO_OAUTH_KEY
-    ctxIOSecretKey = settings.CONTEXTIO_OAUTH_SECRET
-    instance = None
-    lock = threading.Lock()
-    def __init__(self):
-        self.ctxIO = ContextIO(
-            consumer_key = CtxIOConn.ctxIOConsumerKey, 
-            consumer_secret = CtxIOConn.ctxIOSecretKey)
-    @staticmethod
-    def getInstance():
-        if CtxIOConn.instance:
-            return CtxIOConn.instance
-        else:
-            CtxIOConn.lock.acquire()
-            ret = CtxIOConn.instance
-            if ret is None:
-                ret = CtxIOConn()
-            CtxIOConn.instance = ret
-            CtxIOConn.lock.release()
-            return ret
 
 def stripPlainTextSignature(content):
     return content.rsplit('--', 1)[0].rstrip('\n\r -')
@@ -46,12 +23,9 @@ def stripQuotation(content):
             isPrevLineQuotation = False
             if line != "":
                 otherContents.append(line)
-    return numQuotationBlocks, ' '.join(otherContents)
+    return '\n'.join(otherContents)
 
-def plainTextReadingTime((numQuotationBlocks, otherContents)):
-    return float(numQuotationBlocks + len(otherContents.split()))
-
-def convertHtmlToWords(content):
+def convertHtmlToWords2(content):
     class MyHtmlParser(HTMLParser):
         def __init__(self):
             HTMLParser.__init__(self)
@@ -70,50 +44,32 @@ def convertHtmlToWords(content):
     parser.feed(content)
     return parser.words
 
-def htmlReadingTime(words):
-    return float(len(words))
+def convertHtmlToWords(content):
+    h = HTML2Text()
+    h.ignore_links = True
+    h.ignore_images = True
+    h.ignore_emphasis = True
+    return h.handle(content)
 
-def getReadingTimeAndContent(bodys):
+def getWordCount(plaintext):
+    return len(re.findall(r'\w+', plaintext))
+
+def getPlainText(bodys):
+    if not bodys:
+        return ""
     # plain
+    pat = r'\b(([\w-]+://?|www[.])[^\s()<>]+(?:\([\w\d]+\)|([^%s\s]|/)))' % re.escape(string.punctuation)
     for body in bodys:
         content = body['content']
         if body['type'] == 'text/plain' and \
                 content is not None and content != '':
-            return plainTextReadingTime(stripQuotation(
-                    stripPlainTextSignature(content)))
+            content = re.sub(pat, ' ', content)
+            return stripQuotation(content)
 
     # html
     for body in bodys:
         content = body['content']
         if content is not None and content != '':
-            return htmlReadingTime(convertHtmlToWords(content))
+            return stripQuotation(convertHtmlToWords(content))
 
-
-def getThreadReadingTime(user_ctx_id, thread_id):
-    thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id)
-    if thread.is_processed:
-        return thread.estimated_reading_time
-
-    ctxIO = CtxIOConn.getInstance().ctxIO
-    thread_data = contextIO2.Account(ctxIO, {'id' : user_ctx_id}) \
-        .get_message_thread('gm-' + thread_id, **{'include_body' : True})
-
-    totTime = 0
-    for message_data in thread_data['messages']:
-        message_id = message_data['gmail_message_id']
-        message = Message.get_or_insert(key_name = message_id, message_id = message_id)
-        if message.is_processed:
-            time = message.estimated_reading_time
-        else:
-            time = getReadingTimeAndContent(message_data['body'])
-            message.estimated_reading_time = time
-            message.is_processed = True
-            message.put()
-
-        totTime += time
-
-    thread.is_processed = True
-    thread.estimated_reading_time = totTime
-    thread.put()
-    return totTime
 

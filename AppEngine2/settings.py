@@ -1,3 +1,7 @@
+import os
+
+local = 'localhost' in os.environ['SERVER_NAME'] 
+
 # Your Context.IO Consumer key and secret used to sign calls to
 # https://api.context.io.
 #
@@ -22,16 +26,19 @@ CONTEXTIO_OAUTH_SECRET = 'P5vRH5H6pH3olkIa'
 # of the Context.IO console: 
 # https://console.context.io/#settings
 
-APPENGINE_CONSUMER_KEY = r'765627927548.apps.googleusercontent.com'
-APPENGINE_CONSUMER_SECRET = r'r4NOg8dzdDeBh_T3WIQBOxIp'
-
-#APPENGINE_CONSUMER_KEY = r'765627927548-3h5jq638ftomt4ah8dktu1mhtb63kud7.apps.googleusercontent.com'
-#APPENGINE_CONSUMER_SECRET = r'J2-Ec0jyFQ3jRvtDp2te24tv'
+if local:
+	APPENGINE_CONSUMER_KEY = r'765627927548-3h5jq638ftomt4ah8dktu1mhtb63kud7.apps.googleusercontent.com'
+	APPENGINE_CONSUMER_SECRET = r'J2-Ec0jyFQ3jRvtDp2te24tv'
+else:
+	APPENGINE_CONSUMER_KEY = r'765627927548.apps.googleusercontent.com'
+	APPENGINE_CONSUMER_SECRET = r'r4NOg8dzdDeBh_T3WIQBOxIp'
 
 # The name of you App Engine application
 
 APPENGINE_APP_NAME = 'lime-time'
-DOMAIN = 'localhost'
-#DOMAIN = 'lime-time.appspot.com'
 
-READING_SPEED = 5.0
+if local:
+	DOMAIN = 'localhost'
+else:
+	DOMAIN = 'lime-time.appspot.com'
+

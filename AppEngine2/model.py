@@ -10,11 +10,23 @@ class User(db.Model):
 
 class Thread(db.Model):
 	thread_id = db.StringProperty(required=True)
+	user_email = db.StringProperty(required=True)
+	is_queued = db.BooleanProperty(required=True, default=False)
 	is_processed = db.BooleanProperty(required=True, default=False)
-	estimated_reading_time = db.FloatProperty(default=0.0)
+	reading_time = db.IntegerProperty(required=True, default=0)
+	
+	last_date = db.IntegerProperty()
+	last_message_id = db.StringProperty()
+	estimated_reading_time = db.IntegerProperty()
+
 
 class Message(db.Model):
 	message_id = db.StringProperty(required=True)
+	thread_id = db.StringProperty(required=True)
+	user_email = db.StringProperty(required=True)
 	is_processed = db.BooleanProperty(required=True, default=False)
-	estimated_reading_time = db.FloatProperty(default=0.0)
-	
+	word_count = db.IntegerProperty()
+	addresses = db.TextProperty()
+	has_unsubscribe = db.BooleanProperty()
+	is_sent = db.BooleanProperty()
+	date = db.IntegerProperty()

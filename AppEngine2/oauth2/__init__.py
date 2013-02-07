@@ -30,6 +30,8 @@ import urlparse
 import hmac
 import binascii
 import httplib2
+import os
+import binascii
 
 try:
     from urlparse import parse_qs
@@ -509,8 +511,9 @@ class Request(dict):
     @classmethod
     def make_nonce(cls):
         """Generate pseudorandom number."""
-        return str(random.randint(0, 100000000))
- 
+        #return str(random.randint(0, 100000000))
+        return binascii.b2a_hex(os.urandom(16))
+        
     @classmethod
     def from_request(cls, http_method, http_url, headers=None, parameters=None,
             query_string=None):

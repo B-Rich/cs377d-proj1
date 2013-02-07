@@ -21,31 +21,162 @@ from google.appengine.ext import db
 from google.appengine.ext.webapp import util
 from google.appengine.ext.webapp.util import login_required
 from google.appengine.ext.webapp import template
+from google.appengine.ext import deferred
+from google.appengine.runtime import DeadlineExceededError
 
 import datetime
 import wsgiref.handlers
 import md5, logging
 import webapp2
 import settings
-from contextIO2 import ContextIO, Message
+from contextIO2 import ContextIO
 import contextIO2
 import random
 import json
+import traceback
 
-from model import User, Thread
-from utils import getThreadReadingTime
+from model import User, Thread, Message
+from utils import getPlainText, getWordCount, stripPlainTextSignature
+import threading
 
-class ReadingWorker(webapp2.RequestHandler):
+class ContextIOConn(object):
+    ctxioConsumerKey = settings.CONTEXTIO_OAUTH_KEY
+    ctxioSecretKey = settings.CONTEXTIO_OAUTH_SECRET
+    instance = None
+    lock = threading.Lock()
+    def __init__(self):
+        self.ctxio = ContextIO(
+            consumer_key = ContextIOConn.ctxioConsumerKey, 
+            consumer_secret = ContextIOConn.ctxioSecretKey)
+    @staticmethod
+    def getInstance():
+        if ContextIOConn.instance:
+            return ContextIOConn.instance
+        else:
+            ContextIOConn.lock.acquire()
+            ret = ContextIOConn.instance
+            if ret is None:
+                ret = ContextIOConn()
+            ContextIOConn.instance = ret
+            ContextIOConn.lock.release()
+            return ret
+
+def estimateReadingTime(message):
+    if message.is_sent:
+        return 0
+    elif message.has_unsubscribe:
+        return message.word_count * 100
+    elif 'edu' in message.addresses:
+        return message.word_count * 200
+    else:
+        return message.word_count * 200
+
+def processReadingThread(user_ctx_id, user_email, thread_ids):
+    ctxio = ContextIOConn.getInstance().ctxio
+    account = contextIO2.Account(ctxio, {'id' : user_ctx_id})
+    index = 0
+    try:
+        for index, thread_id in enumerate(thread_ids):
+            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = user_email)
+            if thread.is_processed:
+                continue
+            if not thread.is_queued:
+                continue
+
+            thread_data = account.get_message_thread('gm-' + thread_id, include_body=True)
+            thread.last_date = 0
+            for message_data in thread_data['messages']:
+                message_id = message_data['gmail_message_id']
+                message = Message.get_or_insert(key_name = message_id, message_id = message_id, thread_id=thread_id, user_email=user_email)
+                if not message.is_processed:
+                    plain_text = getPlainText(message_data['body'])
+                    message.word_count = getWordCount(stripPlainTextSignature(plain_text))
+                    message.addresses = json.dumps(message_data['addresses'])
+                    message.date = message_data['date']
+                    message.is_sent = '\\Sent' in message_data['folders']
+                    message.has_unsubscribe = 'unsubscribe' in plain_text.lower()
+                    message.is_processed = True
+                    message.put()            
+                if message.date > thread.last_date:
+                    thread.last_date = message.date
+                    thread.last_message_id = message_id
+                    thread.estimated_reading_time = estimateReadingTime(message)
+            thread.is_queued = False
+            thread.is_processed = True
+            thread.put()
+    except DeadlineExceededError:
+        deferred.defer(processReadingThread, user_ctx_id, user_email, thread_ids[index:], _queue='reading-queue', _target='crawler')
+    except Exception as e:
+        logging.error(str(e))
+        raise e
+    
+class ThreadReset(webapp2.RequestHandler):
+    def get(self):
+        for thread in Thread.gql('WHERE is_processed = FALSE AND is_queued = TRUE'):
+            thread.is_queued = False
+            thread.put()
+            self.response.out.write('%s reset + \n' % thread.thread_id)
+
+class ThreadDeferrer(webapp2.RequestHandler):
+    def get(self):
+        email = self.request.get('email')
+        thread_ids = json.loads(self.request.get('thread_ids'))
+        user = User.get_by_key_name(key_names = email)
+        for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                thread.is_queued = True
+                thread.is_processed = False
+
+                thread.put()
+        deferred.defer(processReadingThread, user.user_ctx_id, email, thread_ids, _queue='reading-queue', _target='crawler')
+
+class ThreadReader(webapp2.RequestHandler):
+    def get(self):
+        try:
+            email = self.request.get('email')
+            thread_ids = json.loads(self.request.get('thread_ids'))
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                raise Exception('NO such users')
+            for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                thread.is_queued = True
+                thread.is_processed = False
+
+                thread.put()
+            processReadingThread(user.user_ctx_id, email, thread_ids)
+            for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                logging.info(str(thread.estimated_reading_time))
+                print "%s:%s" % (thread_id, str(thread.estimated_reading_time))
+
+        except Exception as e:
+            logging.error(traceback.format_exc(e))
+
+class UpdateHandler(webapp2.RequestHandler):
     def get(self):
         self.post()
-    def post(self): # should run at most 1/s
-        user_ctx_id = self.request.get('user_ctx_id')
-        thread_id = self.request.get('thread_id')
-        
-        x = getThreadReadingTime(user_ctx_id, thread_id) / settings.READING_SPEED
-        self.response.out.write("%d:%.2d" % (int(x / 60), int(x % 60)))
 
-class MainHandler(webapp2.RequestHandler):
+    def post(self):
+        entityType = self.request.get('entityType')
+        email = self.request.get('email')
+        if entityType == 'ReadingTime':
+            thread_id = self.request.get('threadId')
+            elapsed_time = self.request.get('elapsedTime')
+
+            if not thread_id or not elapsed_time:
+                return
+            try:
+                elapsed_time = int(elapsed_time)
+            except:
+                return
+
+            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+            thread.reading_time += elapsed_time
+            thread.put()
+            self.response.out.write('totaltime for %s: %s' % (thread_id, thread.reading_time))
+
+class GetHandler(webapp2.RequestHandler):
     def get(self):
         self.post()
 
@@ -62,17 +193,20 @@ class MainHandler(webapp2.RequestHandler):
                     user_ctx_id = user.user_ctx_id
                     tid_list = json.loads(hexGmailThreadIdList)
                     results = []
-                    cnt = 0
                     for thread_id in tid_list:
-                        thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id)
-                        if thread.is_processed:
-                            x = thread.estimated_reading_time / settings.READING_SPEED
-                            results.append("%d:%.2d" % (int(x / 60), int(x % 60)))
+                        if thread_id:
+                            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                            if thread.is_processed:
+                                results.append(str(thread.estimated_reading_time))
+                            else:
+                                if not thread.is_queued:
+                                    thread.is_queued = True
+                                    thread.put()
+                                    processReadingThread(user_ctx_id, email, [thread_id])
+                                    #deferred.defer(processReadingThread, user_ctx_id, email, [thread_id], _queue='reading-queue', _target='crawler')
+                                results.append("-1")
                         else:
-                            taskqueue.add(url='/worker/getThreadReadingTime', 
-                                params={'user_ctx_id': user_ctx_id, 'thread_id': thread_id},
-                                queue_name='reading-queue')
-                            results.append("...")
+                            results.append(None)
                     self.response.out.write(json.dumps(results))
                 else:
                     self.response.out.write("null")
@@ -109,7 +243,7 @@ class VersionHandler(webapp2.RequestHandler):
         self.post()
 
     def post(self):
-        self.response.out.write(r"""{"suggestedExtVersion":"3.0","suggestedClientVersion":"3.42"}""")
+        self.response.out.write(r"""{"suggestedExtVersion":"3.0","suggestedClientVersion":"3.42","Lime-Time-GAE":"%s"}""" % settings.APPENGINE_CONSUMER_KEY)
 
 
 class LogClientErrorHandler(webapp2.RequestHandler):
@@ -135,11 +269,14 @@ class CheckRandomCookieHandler(webapp2.RequestHandler):
         self.response.out.write(json.dumps({"message":"cookie valid","success":True}))
         
 app = webapp2.WSGIApplication(
-        [('/ajaxcalls/getEntities', MainHandler), 
+        [('/ajaxcalls/getEntities', GetHandler), 
          ('/ajaxcalls/logClientError', LogClientErrorHandler), 
          ('/ajaxcalls/setRandomCookie', SetRandomCookieHandler),
          ('/ajaxcalls/checkRandomCookie', CheckRandomCookieHandler),
          ('/ajaxcalls/checkSuggestedVersions', VersionHandler),
-         ('/worker/getThreadReadingTime', ReadingWorker)
+         ('/ajaxcalls/updateEntity', UpdateHandler),
+         ('/worker/threadReader', ThreadReader),
+         ('/worker/threadReset', ThreadReset),
+         ('/worker/threadDeferrer', ThreadDeferrer),
          ], 
         debug=True)

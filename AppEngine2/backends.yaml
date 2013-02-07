@@ -1,6 +1,0 @@
-backends:
-- name: crawler
-  class: B2
-  instances: 1
-  options: dynamic
-  

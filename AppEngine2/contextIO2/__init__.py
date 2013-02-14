@@ -19,7 +19,7 @@ class ContextIO(object):
         response, body = self.request(url, method, params, headers)
         status = int(response['status'])
 
-        if (status >= 200 and status < 300) or status == 409:
+        if (status >= 200 and status < 300) or (status >= 400):
             body = json.loads(body)
             return body
 

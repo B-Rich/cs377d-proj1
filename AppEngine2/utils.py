@@ -56,7 +56,7 @@ def getWordCount(plaintext):
 
 def getPlainText(bodys):
     if not bodys:
-        return ""
+        return (False, "NO Content")
     # plain
     pat = r'\b(([\w-]+://?|www[.])[^\s()<>]+(?:\([\w\d]+\)|([^%s\s]|/)))' % re.escape(string.punctuation)
     for body in bodys:
@@ -64,12 +64,12 @@ def getPlainText(bodys):
         if body['type'] == 'text/plain' and \
                 content is not None and content != '':
             content = re.sub(pat, ' ', content)
-            return stripQuotation(content)
+            return (False, stripQuotation(content))
 
     # html
     for body in bodys:
         content = body['content']
         if content is not None and content != '':
-            return stripQuotation(convertHtmlToWords(content))
+            return (True, stripQuotation(convertHtmlToWords(content)))
 
 

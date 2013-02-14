@@ -30,3 +30,4 @@ class Message(db.Model):
 	has_unsubscribe = db.BooleanProperty()
 	is_sent = db.BooleanProperty()
 	date = db.IntegerProperty()
+	is_html = db.BooleanProperty()

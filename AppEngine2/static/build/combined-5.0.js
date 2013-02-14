@@ -17828,6 +17828,9 @@ delete Streak._underscore;
             var self = this;
             this.active = true;
             if (!self.initialized) {
+                setInterval(function () {
+                    self.refreshIndicators()
+                }, 5000);
                 Gmail.observe("ajaxListRefresh", function () {
                     self.refreshIndicators()
                 });
@@ -17946,7 +17949,8 @@ delete Streak._underscore;
                         this.addIndicator(rows[index], "...");
                     }
                 }
-            BB.Modules.TopNav.showUnreadCount(this.getTimeFormat(totalTime));
+            if (totalTime > 0)
+                BB.Modules.TopNav.showUnreadCount(this.getTimeFormat(totalTime));
         },
         addIndicator: function (rowObj, box) {
             if (!rowObj || !box) return;

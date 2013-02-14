@@ -61,7 +61,11 @@ class GrantAccessHandler(webapp2.RequestHandler):
   def get(self, user_email):
     flow = createFlow(self, user_email)
     credentials = StorageByKeyName(CredentialsModel, user_email, 'credentials').get()
-
+    force = self.request.get('force')
+    if force and force == 'true':
+        self.redirect(flow.step1_get_authorize_url()) 
+        return
+    
     if credentials:
       user = User.get_by_key_name(user_email)
       if not user or not user.is_oauth_complete:

@@ -23,6 +23,7 @@ from google.appengine.ext.webapp.util import login_required
 from google.appengine.ext.webapp import template
 from google.appengine.ext import deferred
 from google.appengine.runtime import DeadlineExceededError
+from oauth2client.appengine import CredentialsModel, StorageByKeyName
 
 import datetime
 import wsgiref.handlers
@@ -65,7 +66,7 @@ def estimateReadingTime(message):
     if message.is_sent:
         return 0
     elif message.has_unsubscribe:
-        return message.word_count * 100
+        return message.word_count * 30
     elif 'edu' in message.addresses:
         return message.word_count * 200
     else:
@@ -85,11 +86,17 @@ def processReadingThread(user_ctx_id, user_email, thread_ids):
 
             thread_data = account.get_message_thread('gm-' + thread_id, include_body=True)
             thread.last_date = 0
+            thread.estimated_reading_time = 0
+            if not thread_data or not 'messages' in thread_data:
+                thread.is_queued = False
+                thread.estimated_reading_time = 1000
+                thread.put()    
+                return
             for message_data in thread_data['messages']:
                 message_id = message_data['gmail_message_id']
                 message = Message.get_or_insert(key_name = message_id, message_id = message_id, thread_id=thread_id, user_email=user_email)
                 if not message.is_processed:
-                    plain_text = getPlainText(message_data['body'])
+                    message.is_html, plain_text = getPlainText(message_data['body'])
                     message.word_count = getWordCount(stripPlainTextSignature(plain_text))
                     message.addresses = json.dumps(message_data['addresses'])
                     message.date = message_data['date']
@@ -100,14 +107,14 @@ def processReadingThread(user_ctx_id, user_email, thread_ids):
                 if message.date > thread.last_date:
                     thread.last_date = message.date
                     thread.last_message_id = message_id
-                    thread.estimated_reading_time = estimateReadingTime(message)
+                    thread.estimated_reading_time += estimateReadingTime(message)
             thread.is_queued = False
             thread.is_processed = True
             thread.put()
     except DeadlineExceededError:
         deferred.defer(processReadingThread, user_ctx_id, user_email, thread_ids[index:], _queue='reading-queue', _target='crawler')
     except Exception as e:
-        logging.error(str(e))
+        logging.error('thread_id: %s user_email:%s %s' % (thread_id, user_email, traceback.print_exc()))
         raise e
     
 class ThreadReset(webapp2.RequestHandler):
@@ -174,7 +181,27 @@ class UpdateHandler(webapp2.RequestHandler):
             thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
             thread.reading_time += elapsed_time
             thread.put()
-            self.response.out.write('totaltime for %s: %s' % (thread_id, thread.reading_time))
+            self.response.out.write()
+            logging.info('ReadingTime of thread %s is updated to %s' % (thread_id, thread.reading_time))
+
+class RemoveHandler(webapp2.RequestHandler):
+    def get(self):
+        entityType = self.request.get('entityType')
+        email = self.request.get('email')
+        if entityType == 'User':
+            logging.info('Remove User %s' % email);
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                logging.error('no such User %s' % email);
+                return 
+            user.delete()
+            for m in Message.gql('WHERE user_email=:1',email):
+                m.delete()
+
+            for t in Thread.gql('WHERE user_email=:1',thread):
+                t.delete()
+            StorageByKeyName(CredentialsModel, user_email, 'credentials').locked_delete()
+            logging.info('Remove User successfully')
 
 class GetHandler(webapp2.RequestHandler):
     def get(self):
@@ -202,8 +229,8 @@ class GetHandler(webapp2.RequestHandler):
                                 if not thread.is_queued:
                                     thread.is_queued = True
                                     thread.put()
-                                    processReadingThread(user_ctx_id, email, [thread_id])
-                                    #deferred.defer(processReadingThread, user_ctx_id, email, [thread_id], _queue='reading-queue', _target='crawler')
+                                    #processReadingThread(user_ctx_id, email, [thread_id])
+                                    deferred.defer(processReadingThread, user_ctx_id, email, [thread_id], _queue='reading-queue', _target='crawler')
                                 results.append("-1")
                         else:
                             results.append(None)
@@ -278,5 +305,6 @@ app = webapp2.WSGIApplication(
          ('/worker/threadReader', ThreadReader),
          ('/worker/threadReset', ThreadReset),
          ('/worker/threadDeferrer', ThreadDeferrer),
+         ('/worker/threadRemove', RemoveHandler),
          ], 
         debug=True)

@@ -9,3 +9,15 @@ indexes:
 # manually, move them above the marker line.  The index.yaml file is
 # automatically uploaded to the admin console when you next deploy
 # your application using appcfg.py.
+
+- kind: Thread
+  properties:
+  - name: is_processed
+  - name: is_queued
+  - name: estimated_reading_time
+
+- kind: Thread
+  properties:
+  - name: is_processed
+  - name: is_queued
+  - name: reading_time

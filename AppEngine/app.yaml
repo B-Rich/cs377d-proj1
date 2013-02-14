@@ -1,34 +1,40 @@
 application: lime-time
-version: 2
-runtime: python
+version: 9
+runtime: python27
 api_version: 1
+threadsafe: true
+
+libraries:
+- name: django
+  version: "latest"
+- name: webapp2
+  version: "latest"
+- name: pycrypto
+  version: "latest"
+
+builtins:
+- deferred: on
 
 handlers:
 - url: /
-  script: main.py
-  login: required
+  script: main.app
 
-- url: /.*\.json
-  script: handlers.py
-  login: required
+- url: /worker/(.*)
+  script: main.app
 
-- url: /imapoauth_.*
-  script: imapoauth.py
+- url: /ajaxcalls/(.*)
+  script: main.app
 
-- url: /images
-  static_dir: static/images
+- url: /oauth/(.*)
+  script: oauth.app
 
-- url: /css
-  static_dir: static/css
+- url: /i18n/locale?(.*)
+  static_files: static/locale.json
+  upload: static/locale.json
 
-- url: /js
-  static_dir: static/js
+- url: /build
+  static_dir: static/build
 
-- url: /((.*).ico)
+- url: /(.*\..*)
   static_files: static/\1
-  upload: static/((.*).ico)
-
-- url: /(google(.*).html)
-  static_files: site-verif/\1
-  upload: site-verif/(google(.*).html)
-
+  upload: static/(.*\..*)

@@ -14,68 +14,316 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import wsgiref.handlers
-import cgi, os, md5, logging
 from google.appengine.api import users
-from google.appengine.ext import webapp
+from google.appengine.api import taskqueue
+from google.appengine.api import memcache
+from google.appengine.ext import db 
 from google.appengine.ext.webapp import util
+from google.appengine.ext.webapp.util import login_required
 from google.appengine.ext.webapp import template
+from google.appengine.ext import deferred
+from google.appengine.runtime import DeadlineExceededError
+from oauth2client.appengine import CredentialsModel, StorageByKeyName
+
+import datetime
+import wsgiref.handlers
+import md5, logging
+import webapp2
 import settings
 from contextIO2 import ContextIO
+import contextIO2
+import random
+import json
+import traceback
 
-class MainHandler(webapp.RequestHandler):
-    def get(self):
-        if users.get_current_user():
+from model import User, Thread, Message
+from utils import getPlainText, getWordCount, stripPlainTextSignature
+import threading
 
-            # Get the email address of the user and see if that mailbox is available
-            # in our Context.IO account by using the /imap/accountinfo.json API call
-            current_user = users.get_current_user()
-            current_email = current_user.email()
-            
-            # Figure out if there's an account corresponding to the current users's email address.
-            # Normally, your app would maintain the Context.IO account id corresponding to each user
-            # account but for the sake of keeping this example simple, we're checking every time and
-            # setting a cookie with the account id every time an authentified user logs in this demo.
-
-            ctxIO = ContextIO(consumer_key=settings.CONTEXTIO_OAUTH_KEY, consumer_secret=settings.CONTEXTIO_OAUTH_SECRET)
-            accntList = ctxIO.get_accounts(email=current_email)
-            if len(accntList) >= 1:
-                # The mailbox is available under our Context.IO account
-                
-                # The following is to avoid implementing a user property storage for this app
-                # (see comment above)
-                self.response.headers.add_header('Set-Cookie','ctxioid='+ accntList[0].id +'; path=/;')
-                m = md5.new()
-                m.update(accntList[0].id)
-                m.update(current_email)
-                self.response.headers.add_header('Set-Cookie','ctxiohash='+ m.hexdigest() +'; path=/;')
-                
-                # show the application main UI. This UI will get data from the mailbox
-                # through XMLHttpRequest calls handled by handlers.py
-                url = users.create_logout_url(self.request.uri)
-                template_values = {
-                    'url': url,
-                    'url_linktext': 'sign out',
-                }
-                path = os.path.join(os.path.dirname(__file__), 'templates', 'app.html')
-                self.response.out.write(template.render(path, template_values))
-            else:
-                # This mailbox isn't available under our Context.IO account, show
-                # users the page prompting them to connect their Gmail account
-                # through OAuth. See imapoauth.py for steps on obtaining Access
-                # Token and adding the mailbox to our Context.IO account.
-                template_values = {
-                    'connect_link': '/imapoauth_step1'
-                }
-                path = os.path.join(os.path.dirname(__file__), 'templates', 'connect.html')
-                self.response.out.write(template.render(path, template_values))
+class ContextIOConn(object):
+    ctxioConsumerKey = settings.CONTEXTIO_OAUTH_KEY
+    ctxioSecretKey = settings.CONTEXTIO_OAUTH_SECRET
+    instance = None
+    lock = threading.Lock()
+    def __init__(self):
+        self.ctxio = ContextIO(
+            consumer_key = ContextIOConn.ctxioConsumerKey, 
+            consumer_secret = ContextIOConn.ctxioSecretKey)
+    @staticmethod
+    def getInstance():
+        if ContextIOConn.instance:
+            return ContextIOConn.instance
         else:
-            self.response.out.write("Oops, forgot to login: required option for this script in app.yaml?")
+            ContextIOConn.lock.acquire()
+            ret = ContextIOConn.instance
+            if ret is None:
+                ret = ContextIOConn()
+            ContextIOConn.instance = ret
+            ContextIOConn.lock.release()
+            return ret
 
-def main():
-    application = webapp.WSGIApplication([('/', MainHandler)], debug=True)
-    util.run_wsgi_app(application)
+def estimateReadingTime(message):
+    if message.is_sent:
+        return 0
+    elif message.has_unsubscribe:
+        return message.word_count * 30
+    elif 'edu' in message.addresses:
+        return message.word_count * 200
+    else:
+        return message.word_count * 200
+
+def processReadingThread(user_ctx_id, user_email, thread_ids):
+    ctxio = ContextIOConn.getInstance().ctxio
+    account = contextIO2.Account(ctxio, {'id' : user_ctx_id})
+    index = 0
+    try:
+        for index, thread_id in enumerate(thread_ids):
+            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = user_email)
+            if thread.is_processed:
+                continue
+            if not thread.is_queued:
+                continue
+
+            thread_data = account.get_message_thread('gm-' + thread_id, include_body=True)
+            thread.last_date = 0
+            thread.estimated_reading_time = 0
+            if not thread_data or not 'messages' in thread_data:
+                thread.is_queued = False
+                thread.estimated_reading_time = 1000
+                thread.put()    
+                return
+            for message_data in thread_data['messages']:
+                message_id = message_data['gmail_message_id']
+                message = Message.get_or_insert(key_name = message_id, message_id = message_id, thread_id=thread_id, user_email=user_email)
+                if not message.is_processed:
+                    message.is_html, plain_text = getPlainText(message_data['body'])
+                    message.word_count = getWordCount(stripPlainTextSignature(plain_text))
+                    message.addresses = json.dumps(message_data['addresses'])
+                    message.date = message_data['date']
+                    message.is_sent = '\\Sent' in message_data['folders']
+                    message.has_unsubscribe = 'unsubscribe' in plain_text.lower()
+                    message.is_processed = True
+                    message.put()            
+                if message.date > thread.last_date:
+                    thread.last_date = message.date
+                    thread.last_message_id = message_id
+                    thread.estimated_reading_time += estimateReadingTime(message)
+            thread.is_queued = False
+            thread.is_processed = True
+            thread.put()
+    except DeadlineExceededError:
+        deferred.defer(processReadingThread, user_ctx_id, user_email, thread_ids[index:], _queue='reading-queue', _target='crawler')
+    except Exception as e:
+        logging.error('thread_id: %s user_email:%s %s' % (thread_id, user_email, traceback.print_exc()))
+        raise e
+    
+class ThreadReset(webapp2.RequestHandler):
+    def get(self):
+        for thread in Thread.gql('WHERE is_processed = FALSE AND is_queued = TRUE'):
+            thread.is_queued = False
+            thread.put()
+            self.response.out.write('%s reset + \n' % thread.thread_id)
+
+class ThreadDeferrer(webapp2.RequestHandler):
+    def get(self):
+        email = self.request.get('email')
+        thread_ids = json.loads(self.request.get('thread_ids'))
+        user = User.get_by_key_name(key_names = email)
+        for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                thread.is_queued = True
+                thread.is_processed = False
+
+                thread.put()
+        deferred.defer(processReadingThread, user.user_ctx_id, email, thread_ids, _queue='reading-queue', _target='crawler')
+
+class ThreadReader(webapp2.RequestHandler):
+    def get(self):
+        try:
+            email = self.request.get('email')
+            thread_ids = json.loads(self.request.get('thread_ids'))
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                raise Exception('NO such users')
+            for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                thread.is_queued = True
+                thread.is_processed = False
+
+                thread.put()
+            processReadingThread(user.user_ctx_id, email, thread_ids)
+            for index, thread_id in enumerate(thread_ids):
+                thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                logging.info(str(thread.estimated_reading_time))
+                print "%s:%s" % (thread_id, str(thread.estimated_reading_time))
+
+        except Exception as e:
+            logging.error(traceback.format_exc(e))
+
+class UpdateHandler(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        entityType = self.request.get('entityType')
+        email = self.request.get('email')
+        if entityType == 'ReadingTime':
+            thread_id = self.request.get('threadId')
+            elapsed_time = self.request.get('elapsedTime')
+
+            if not thread_id or not elapsed_time:
+                return
+            try:
+                elapsed_time = int(elapsed_time)
+            except:
+                return
+
+            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+            thread.reading_time += elapsed_time
+            thread.put()
+            logging.info('ReadingTime of thread %s is updated to %s' % (thread_id, thread.reading_time))
+
+class RemoveHandler(webapp2.RequestHandler):
+    def get(self):
+        entityType = self.request.get('entityType')
+        email = self.request.get('email')
+        if entityType == 'User':
+            logging.info('Remove User %s' % email);
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                logging.error('no such User %s' % email);
+                return 
+            user.delete()
+            for m in Message.gql('WHERE user_email=:1',email):
+                m.delete()
+
+            for t in Thread.gql('WHERE user_email=:1',thread):
+                t.delete()
+            StorageByKeyName(CredentialsModel, user_email, 'credentials').locked_delete()
+            logging.info('Remove User successfully')
+
+class GetHandler(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        entityType = self.request.get('entityType')
+        email = self.request.get('email')
+        if entityType == 'EstimatedTime':
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                self.response.out.write("null")
+            else:
+                hexGmailThreadIdList = self.request.get('hexGmailThreadIdList')
+                if hexGmailThreadIdList:
+                    user_ctx_id = user.user_ctx_id
+                    tid_list = json.loads(hexGmailThreadIdList)
+                    results = []
+                    for thread_id in tid_list:
+                        if thread_id:
+                            thread = Thread.get_or_insert(key_name = thread_id, thread_id = thread_id, user_email = email)
+                            if thread.is_processed:
+                                results.append(str(thread.estimated_reading_time))
+                            else:
+                                if not thread.is_queued:
+                                    thread.is_queued = True
+                                    thread.put()
+                                    processReadingThread(user_ctx_id, email, [thread_id])
+                                    #FIXME
+                                    #deferred.defer(processReadingThread, user_ctx_id, email, [thread_id], _queue='reading-queue', _target='crawler')
+                                results.append("-1")
+                        else:
+                            results.append(None)
+                    self.response.out.write(json.dumps(results))
+                else:
+                    self.response.out.write("null")
+        elif entityType == 'User':
+            user = User.get_by_key_name(key_names = email)
+            if not user:
+                self.response.out.write('null')
+            else:
+                result = {
+                    "userId": user.user_ctx_id,
+                    "email": email,
+                    "orgKey": "",
+                    "creationTimestamp": "1359721200347",
+                    "lastUpdatedTimestamp": "1359878999598",
+                    "lastSeenTimestamp": "1359878400000",
+                    "lastSeenClientVersion": "5.10",
+                    "lastSeenExtVersion": "5.0",
+                    "lastSeenBrowser": "Chrome",
+                    "userSettings": {
+                        "value": "{}"
+                    },
+                    "isOauthComplete": user.is_oauth_complete,
+                    "userKey": "",
+                    "displayName": email,
+                    "key": "",
+                    "experiments": {}
+                }
+                self.response.out.write(json.dumps(result))
+        else:
+            self.response.out.write("[]")
+
+class VersionHandler(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        self.response.out.write(r"""{"suggestedExtVersion":"3.0","suggestedClientVersion":"3.42","Lime-Time-GAE":"%s"}""" % settings.APPENGINE_CONSUMER_KEY)
 
 
-if __name__ == '__main__':
-    main()
+class DefaultHandler(webapp2.RequestHandler):
+    def get(self):
+        self.redirect('https://chrome.google.com/webstore/detail/lime-time/gdehpihpnflfcijmhchendlnijmdphah?hl=en')
+        pass
+
+    def post(self):
+        self.get()
+
+class LogClientErrorHandler(webapp2.RequestHandler):
+    def get(self):
+        pass
+
+    def post(self):
+        pass
+
+class SetRandomCookieHandler(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        self.response.headers.add_header("Set-Cookie", 'randomCookie=196;Path=/;Expires=Sat, 06-Apr-14 12:08:46 GMT')
+        self.response.out.write(json.dumps({"cookieName":"randomCookie","cookieValue":"196"}))
+
+class CheckRandomCookieHandler(webapp2.RequestHandler):
+    def get(self):
+        self.post()
+
+    def post(self):
+        self.response.out.write(json.dumps({"message":"cookie valid","success":True}))
+        
+class CalcStatHandler(webapp2.RequestHandler):
+    def get(self):
+        self.response.out.write('UID\tTID\tMId\tRTime\tERTime\twC\tunsub\tedu\tsent\tis_html\n')
+        for thread in Thread.gql('WHERE is_processed = TRUE AND is_queued = FALSE AND estimated_reading_time > 0'):
+            message = Message.get_by_key_name(thread.last_message_id, None)
+            if message != None:
+                self.response.out.write('%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n' % (message.user_email, 
+                    message.thread_id, message.message_id, thread.reading_time, thread.estimated_reading_time, 
+                    message.word_count, message.has_unsubscribe, 'edu' in message.addresses, message.is_sent, message.is_html))
+app = webapp2.WSGIApplication(
+        [('/ajaxcalls/getEntities', GetHandler), 
+         ('/ajaxcalls/logClientError', LogClientErrorHandler), 
+         ('/ajaxcalls/setRandomCookie', SetRandomCookieHandler),
+         ('/ajaxcalls/checkRandomCookie', CheckRandomCookieHandler),
+         ('/ajaxcalls/checkSuggestedVersions', VersionHandler),
+         ('/ajaxcalls/updateEntity', UpdateHandler),
+         ('/worker/threadReader', ThreadReader),
+         ('/worker/threadReset', ThreadReset),
+         ('/worker/threadDeferrer', ThreadDeferrer),
+         ('/worker/threadRemove', RemoveHandler),
+         ('/', DefaultHandler),
+         ('/worker/calcStat', CalcStatHandler),
+         ], 
+        debug=True)

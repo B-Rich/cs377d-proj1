@@ -1,9 +1,4 @@
-try:
-    import json
-except ImportError:
-    # JSON module introduced in Python 2.6, Google AppEngine still
-    # uses Python 2.5
-    from django.utils import simplejson as json
+from django.utils import simplejson as json
 import re
 from urllib import urlencode, quote
 from oauth2 import Request, Consumer, Client, SignatureMethod_HMAC_SHA1 as sha1
@@ -24,7 +19,7 @@ class ContextIO(object):
         response, body = self.request(url, method, params, headers)
         status = int(response['status'])
 
-        if status >= 200 and status < 300:
+        if (status >= 200 and status < 300) or (status >= 400):
             body = json.loads(body)
             return body
 
@@ -37,7 +32,7 @@ class ContextIO(object):
             url += '?' + urlencode(params)
         elif method == 'POST' and params:
             body = urlencode(params)
-        print method + ' ' + url        
+        #print "{method} {url}".format(url=url, method=method)
         return self.client.request(url, method, headers=headers, body=body)
 
     def get_accounts(self, **params):
@@ -55,12 +50,45 @@ class ContextIO(object):
     def put_account(self, first_name=None, last_name=None):
         pass
 
+    def get_connect_tokens(self):
+        return [ConnectToken(self, obj) for obj in self.request_uri('connect_tokens')]
+
+    # Zhe Yang
+    def get_account_connect_tokens(self, account_id):
+        return [ConnectToken(self, obj) for obj in self.request_uri('accounts/%s/connect_tokens' % account_id)]
+
+    # Zhe Yang
+    def post_account_connect_token(self, account_id, callback_url, **params):
+        params = Resource.sanitize_params(params, ['service_level', 'email', 'first_name', 'last_name', 'source_callback_url', 'source_sync_flags', 'source_raw_file_list'])
+        params['callback_url'] = callback_url
+        resp = self.request_uri('accounts/%s/connect_tokens' % account_id, method='POST', params=params)
+        token = resp['token']
+        redirect_url = resp['browser_redirect_url']
+        return (token, redirect_url)
+
+    def get_connect_token(self, token):
+        obj = self.request_uri('connect_tokens/%s' % token)
+        return ConnectToken(self, obj)
+
+    def post_connect_token(self, callback_url, **params):
+        params = Resource.sanitize_params(params, ['service_level', 'email', 'first_name', 'last_name', 'source_callback_url', 'source_sync_flags', 'source_raw_file_list'])
+        params['callback_url'] = callback_url
+        resp = self.request_uri('connect_tokens', method='POST', params=params)
+        token = resp['token']
+        redirect_url = resp['browser_redirect_url']
+        return (token, redirect_url)
+
     def handle_request_error(self, response, body):
+        messages = []
         try:
             body = json.loads(body)
-            raise Exception('HTTP %(status)s - %(type)s %(code)s: %(message)s' % { 'status': response['status'], 'type': body['type'], 'code': body['code'], 'message': body['value']})
-        except ValueError:
-            raise Exception('HTTP %(status)s: %(body)s' % {'status':response['status'], 'body':body})
+            for message in body['messages']:
+                if message['type'] == 'error':
+                    messages.append("error {0}".format(message['code']))
+            raise Exception('HTTP {status}: {message}'.format(status=response['status'], message=', '.join(messages)))
+
+        except (ValueError, KeyError):
+            raise Exception('HTTP {status}: {body}'.format(status=response['status'], body=body))
 
 class Resource(object):
     def __init__(self, parent, base_uri, defn):
@@ -73,10 +101,7 @@ class Resource(object):
                 setattr(self, k, None)
 
         self.parent = parent
-        try:
-            self.base_uri = quote(base_uri.format(**defn))
-        except:
-            self.base_uri = quote(base_uri.replace('{','%(').replace('}',')s') % defn)
+        self.base_uri = quote(base_uri.format(**defn))
 
     def uri_for(self, *elems):
         return '/'.join([self.base_uri] + list(elems))
@@ -117,11 +142,29 @@ class Account(Resource):
 
         return [Message(self, obj) for obj in self.request_uri('messages', params=params)]
 
-    def get_sources(self):
-        return self.request_uri('sources')
+    def get_message(self, message_id, **params):
+        params = Resource.sanitize_params(params, ['include_body', 'include_headers', 'include_flags', 'body_type'])
+        for key in ['include_headers', 'include_body']:
+            if key in params:
+                params[key] = '1' if params[key] is True else '0'
+        obj = self.request_uri('messages/%s' % message_id, params=params)
+        return Message(self, obj)
+
+    # by Zhe Yang
+    def get_message_thread(self, message_id, **params):
+        params = Resource.sanitize_params(params, ['include_body', 'include_headers', 'include_flags', 'body_type', 'limit', 'offset'])
+        for key in ['include_headers', 'include_body']:
+            if key in params:
+                params[key] = '1' if params[key] is True else '0'
+        obj = self.request_uri('messages/%s/thread' % message_id, params=params)
+        return obj
+
+    def get_sources(self, **params):
+        params = Resource.sanitize_params(params, ['status', 'status_ok'])
+        return self.request_uri('sources', params=params)
 
     def post_source(self, email, server, username, use_ssl=True, port='993', type='imap', **params):
-        params = Resource.sanitize_params(params, ['service_level', 'sync_period', 'password', 'provider_token', 'provider_token_secret', 'provider_consumer_key'])
+        params = Resource.sanitize_params(params, ['service_level', 'sync_period', 'password', 'provider_token', 'provider_token_secret', 'provider_consumer_key', 'provider_refresh_token'])
         params['email'] = email
         params['server'] = server
         params['username'] = username
@@ -144,7 +187,25 @@ class Contact(Resource):
 
     def get_files(self, **params):
         params = Resource.sanitize_params(params, ['limit', 'offset'])
-        return self.request_uri('files', params=params)
+        body = self.request_uri('files', params=params)
+
+        result = []
+        for obj in body:
+            file_name = obj.get('file_name')
+            occurrences = []
+            for o in obj.get('occurrences'):
+                occurrences.append({
+                    'file': File(self.parent, o),
+                    'message': Message(self.parent, o)
+                })
+
+            result.append({
+                'file_name': obj.get('file_name'),
+                'latest_date': as_datetime(obj.get('latestDate')),
+                'occurrences': occurrences
+            })
+
+        return result
 
     def get_messages(self, **params):
         params = Resource.sanitize_params(params, ['limit', 'offset'])
@@ -198,12 +259,13 @@ class Message(Resource):
     def __init__(self, parent, defn):
         super(Message, self).__init__(parent, 'messages/{message_id}', defn)
 
-        person_info, to, frm = process_person_info(parent, defn['person_info'], defn['addresses'])
-        self.person_info = person_info
-        self.addresses = {
-            'to': to,
-            'from': frm
-        }
+        if 'person_info' in defn:
+            person_info, to, frm = process_person_info(parent, defn['person_info'], defn['addresses'])
+            self.person_info = person_info
+            self.addresses = {
+                'to': to,
+                'from': frm
+                }
         self.date = as_datetime(self.date)
 
         if 'files' in defn:
@@ -255,3 +317,12 @@ class Message(Resource):
         if self.thread is None:
             self.thread = self.request_uri('thread')
         return self.thread
+
+
+class ConnectToken(Resource):
+    keys = ['token', 'email', 'created', 'used', 'callback_url', 'service_level', 'first_name', 'last_name', 'account']
+    def __init__(self, parent, defn):
+        super(ConnectToken, self).__init__(parent, 'connect_tokens/{token}', defn)
+        if defn['account']:
+            self.account = Account(self.parent, defn['account'])
+
